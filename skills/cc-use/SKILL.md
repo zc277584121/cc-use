@@ -88,11 +88,29 @@ tmux send-keys -t "cc-use-inner" 'claude --allowedTools "Bash(npm *)" "Read" "Ed
 tmux send-keys -t "cc-use-inner" "claude" Enter
 ```
 
-Wait a few seconds for Claude to initialize, then send the task prompt:
+Wait a few seconds for Claude to initialize, then send the task prompt.
+
+**IMPORTANT — Sending multi-line prompts**: Terminals use paste bracketing which can cause multi-line text to be pasted but NOT submitted. To reliably send prompts:
+
 ```bash
+# Option 1 (RECOMMENDED): Write prompt to a temp file, then use a single-line command
+cat > /tmp/cc-use-prompt.txt <<'PROMPT'
+Your multi-line task prompt here...
+Line 2...
+Line 3...
+PROMPT
 sleep 5
-tmux send-keys -t "cc-use-inner" "<task prompt>" Enter
+# Send the prompt as a single-line read command
+tmux send-keys -t "cc-use-inner" "$(cat /tmp/cc-use-prompt.txt | tr '\n' ' ')" Enter
 ```
+
+```bash
+# Option 2: For short prompts (single line), send directly
+sleep 5
+tmux send-keys -t "cc-use-inner" "Fix the bug in auth.ts where the token is not validated" Enter
+```
+
+**Never send raw multi-line heredocs via `tmux send-keys`** — paste bracketing will eat the Enter key and the prompt won't be submitted.
 
 ### Phase 3: Monitor and Steer (Core Loop)
 
@@ -105,10 +123,23 @@ tmux capture-pane -t "cc-use-inner" -p -S -40
 ```
 
 Read the last ~40 lines. Determine the inner Claude's state:
-- **Still running**: output is actively changing, tool calls in progress → wait and check again later
-- **Waiting for input**: you see the `>` prompt at the bottom → inner Claude finished a round, read its response
+- **Still running**: output is actively changing, tool calls in progress → wait and check again
+- **Waiting for input**: you see the `❯` prompt at the bottom → inner Claude finished a round, read its response
 - **Waiting for permission**: you see a permission dialog → either the user handles it in tmux, or you note it
 - **Error/stuck**: repeated errors or no progress → intervene
+
+**Polling strategy**: Do NOT use long `sleep` calls (sleep 30, sleep 40, etc.) blindly. Instead:
+```bash
+# Poll with short intervals until state changes
+for i in $(seq 1 30); do
+  output=$(tmux capture-pane -t "cc-use-inner" -p -S -5)
+  if echo "$output" | grep -qE '^❯|^\$'; then
+    break  # Inner Claude is idle, ready for input
+  fi
+  sleep 5
+done
+```
+This checks every 5 seconds for up to 2.5 minutes, and stops as soon as the inner Claude is idle.
 
 #### Step 2: Read the response (incremental capture)
 
@@ -142,8 +173,15 @@ wc -c < .cc-use/logs/inner-output.log > .cc-use/state/log-offset
 
 #### Sending follow-up instructions to inner Claude:
 ```bash
-tmux send-keys -t "cc-use-inner" "Your next instruction here..." Enter
+# IMPORTANT: Always check inner Claude is idle BEFORE sending commands
+# Look for the ❯ prompt to confirm it's ready for input
+output=$(tmux capture-pane -t "cc-use-inner" -p -S -3)
+if echo "$output" | grep -qE '^❯'; then
+  tmux send-keys -t "cc-use-inner" "Your next instruction here..." Enter
+fi
 ```
+
+**WARNING — Command accumulation**: If you send multiple commands while inner Claude is busy, they queue up in the terminal input buffer and execute in rapid succession. This is especially dangerous with `/exit` + restart sequences. Always verify the inner Claude is idle before sending any command.
 
 ### Phase 4: Acceptance Testing
 
@@ -207,10 +245,31 @@ You can manage the inner Claude's context from outside:
 
 ### When inner Claude needs a restart (MCP/plugin/settings changed):
 ```bash
+# Step 1: Ensure inner Claude is idle first
 tmux send-keys -t "cc-use-inner" "/exit" Enter
-sleep 3
+
+# Step 2: Wait for actual exit (check for shell prompt, NOT just sleep)
+for i in $(seq 1 15); do
+  output=$(tmux capture-pane -t "cc-use-inner" -p -S -3)
+  if echo "$output" | grep -qE '^\(base\)|^\$|^zhangchen@'; then
+    break  # Shell prompt returned, claude has exited
+  fi
+  sleep 2
+done
+
+# Step 3: Now safe to restart
 tmux send-keys -t "cc-use-inner" "claude <permission flags>" Enter
-sleep 5
+
+# Step 4: Wait for Claude to be ready
+for i in $(seq 1 15); do
+  output=$(tmux capture-pane -t "cc-use-inner" -p -S -3)
+  if echo "$output" | grep -qE '^❯'; then
+    break
+  fi
+  sleep 2
+done
+
+# Step 5: Send new prompt
 tmux send-keys -t "cc-use-inner" "Continue the task: <brief context>" Enter
 ```
 
@@ -248,6 +307,23 @@ When the inner Claude or you make system-level changes, record them in `.cc-use/
 **Rules**:
 - **Always ask the user** before: installing global packages, modifying shell config, installing MCP servers, modifying system settings, running sudo commands
 - **OK to do without asking**: project-level `npm install` / `uv sync`, creating virtualenvs, running tests, git operations (non-force-push)
+
+## Delegation Discipline
+
+**Do NOT do the inner Claude's job.** As the outer Claude, you should:
+
+- ✅ Read inner Claude's output to understand progress
+- ✅ Send instructions and corrections to inner Claude
+- ✅ Run acceptance tests (tests, browser checks) to verify results
+- ✅ Manage inner Claude's context and lifecycle
+- ❌ Do NOT read project source files yourself (let inner Claude do it)
+- ❌ Do NOT edit project files directly (send instructions to inner Claude)
+- ❌ Do NOT debug build errors yourself (tell inner Claude what you see)
+- ❌ Do NOT configure project tooling (tell inner Claude to do it)
+
+The whole point of cc-use is to keep implementation details OUT of your context. If you start reading and editing project files, you lose that advantage.
+
+**Exception**: Acceptance testing in Phase 4 — you may directly run tests, use agent-browser, or read specific output files to verify results.
 
 ## Crafting Task Prompts for Inner Claude
 

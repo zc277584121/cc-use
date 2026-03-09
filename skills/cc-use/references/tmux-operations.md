@@ -18,9 +18,17 @@ tmux send-keys -t "cc-use-inner" "claude --dangerously-skip-permissions" Enter
 ```
 
 ### Send input to inner Claude
+
+**CRITICAL: Always verify inner Claude is idle before sending input.**
 ```bash
-# Send a prompt or instruction
-tmux send-keys -t "cc-use-inner" "Your instruction here" Enter
+# Check for idle state (❯ prompt visible)
+output=$(tmux capture-pane -t "cc-use-inner" -p -S -3)
+echo "$output" | grep -qE '^❯' && echo "ready" || echo "busy"
+```
+
+```bash
+# Short, single-line instructions (preferred)
+tmux send-keys -t "cc-use-inner" "Fix the auth bug in src/auth.ts" Enter
 
 # Send a slash command
 tmux send-keys -t "cc-use-inner" "/compact focus on authentication" Enter
@@ -28,6 +36,41 @@ tmux send-keys -t "cc-use-inner" "/compact focus on authentication" Enter
 # Send Ctrl+C to interrupt
 tmux send-keys -t "cc-use-inner" C-c
 ```
+
+### Sending multi-line prompts (IMPORTANT)
+
+Terminal paste bracketing causes multi-line text sent via `tmux send-keys` to be pasted but NOT submitted. **Never send raw multi-line heredocs.**
+
+```bash
+# CORRECT: Write to temp file, flatten to single line, then send
+cat > /tmp/cc-use-prompt.txt <<'PROMPT'
+## Task: Fix auth bug
+
+### Goal
+Fix token validation in auth.ts
+
+### Done when
+All tests in tests/auth/ pass
+PROMPT
+
+tmux send-keys -t "cc-use-inner" "$(cat /tmp/cc-use-prompt.txt | tr '\n' ' ')" Enter
+```
+
+```bash
+# WRONG: This will paste but NOT submit
+tmux send-keys -t "cc-use-inner" "$(cat <<'EOF'
+Line 1
+Line 2
+EOF
+)" Enter
+# ^^^ The Enter at the end gets eaten by paste bracketing
+```
+
+### Avoiding command accumulation
+
+If you send commands while inner Claude is busy, they queue in the terminal buffer and fire in rapid succession when Claude finishes. This causes chaos — especially `/exit` followed by `claude` restart.
+
+**Rule: One command at a time. Always check idle state first.**
 
 ### Stop and cleanup
 ```bash
@@ -94,11 +137,42 @@ Read the last few lines of output and look for patterns:
 
 | Pattern | State |
 |---------|-------|
-| `> ` at end of output | Idle — waiting for user input |
-| `⏺` or tool names appearing | Running — executing tools |
-| `Permission needed` or `Allow?` | Blocked — waiting for permission |
-| `Cost:` line visible | Just finished a round |
+| `❯` at start of last line | Idle — waiting for user input |
+| `●` or tool names appearing | Running — executing tools |
+| `Allow?` or permission dialog | Blocked — waiting for permission |
+| `✻ Brewed for` line visible | Just finished a round |
+| Shell prompt (e.g., `$`, `(base) user@host:`) | Claude has exited |
 | No change between captures | Idle or stuck |
+
+### Polling until idle (recommended pattern)
+
+Do NOT use blind `sleep 30` calls. Use a polling loop:
+
+```bash
+# Wait for inner Claude to become idle (max ~2.5 min)
+for i in $(seq 1 30); do
+  output=$(tmux capture-pane -t "cc-use-inner" -p -S -5)
+  if echo "$output" | grep -qE '^❯'; then
+    echo "Inner Claude is idle"
+    break
+  fi
+  sleep 5
+done
+```
+
+### Polling until Claude process exits (for restart)
+
+```bash
+# Wait for shell prompt to return after /exit
+for i in $(seq 1 15); do
+  output=$(tmux capture-pane -t "cc-use-inner" -p -S -3)
+  if echo "$output" | grep -qE '^\$|^[a-z]+@|^\(base\)'; then
+    echo "Claude has exited, shell prompt returned"
+    break
+  fi
+  sleep 2
+done
+```
 
 ## Advanced: Multiple Sessions
 
