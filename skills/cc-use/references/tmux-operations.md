@@ -37,12 +37,12 @@ tmux send-keys -t "cc-use-inner" "/compact focus on authentication" Enter
 tmux send-keys -t "cc-use-inner" C-c
 ```
 
-### Sending multi-line prompts (IMPORTANT)
+### Sending prompts (IMPORTANT)
 
-Terminal paste bracketing causes multi-line text sent via `tmux send-keys` to be pasted but NOT submitted. **Never send raw multi-line heredocs.**
+Claude Code collapses long pasted text (>~700 chars) into `[Pasted text ...]` and does NOT auto-submit it. To handle this reliably, **always send text and Enter as two separate calls**:
 
 ```bash
-# CORRECT: Write to temp file, flatten to single line, then send
+# CORRECT: Write to temp file, flatten, send text + Enter separately
 cat > /tmp/cc-use-prompt.txt <<'PROMPT'
 ## Task: Fix auth bug
 
@@ -53,17 +53,29 @@ Fix token validation in auth.ts
 All tests in tests/auth/ pass
 PROMPT
 
-tmux send-keys -t "cc-use-inner" "$(cat /tmp/cc-use-prompt.txt | tr '\n' ' ')" Enter
+flat=$(cat /tmp/cc-use-prompt.txt | tr '\n' ' ')
+tmux send-keys -t "cc-use-inner" "$flat"
+sleep 1
+tmux send-keys -t "cc-use-inner" Enter
 ```
 
+**Tested results**:
+| Length | Single `send-keys ... Enter` | Two-step (text, then Enter) |
+|--------|------------------------------|----------------------------|
+| <500 chars | ✅ Works | ✅ Works |
+| 500-700 chars | ⚠️ May work | ✅ Works |
+| >700 chars | ❌ Collapsed, not submitted | ✅ Works |
+
+**Always use the two-step method** — it works for any length.
+
 ```bash
-# WRONG: This will paste but NOT submit
+# WRONG: raw multi-line text with actual newlines
 tmux send-keys -t "cc-use-inner" "$(cat <<'EOF'
 Line 1
 Line 2
 EOF
 )" Enter
-# ^^^ The Enter at the end gets eaten by paste bracketing
+# ^^^ Paste bracketing eats the Enter
 ```
 
 ### Avoiding command accumulation

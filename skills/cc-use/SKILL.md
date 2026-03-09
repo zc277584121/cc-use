@@ -100,27 +100,30 @@ tmux send-keys -t "cc-use-inner" "claude" Enter
 
 Wait a few seconds for Claude to initialize, then send the task prompt.
 
-**IMPORTANT — Sending multi-line prompts**: Terminals use paste bracketing which can cause multi-line text to be pasted but NOT submitted. To reliably send prompts:
+**IMPORTANT — Sending prompts to inner Claude**:
+
+Claude Code collapses long pasted text (roughly >700 characters) into `[Pasted text ...]` and does NOT auto-submit. To handle this reliably:
 
 ```bash
-# Option 1 (RECOMMENDED): Write prompt to a temp file, then use a single-line command
+# Step 1: Write your prompt to a temp file
 cat > /tmp/cc-use-prompt.txt <<'PROMPT'
 Your multi-line task prompt here...
-Line 2...
-Line 3...
+Can be as long as needed.
 PROMPT
-sleep 5
-# Send the prompt as a single-line read command
-tmux send-keys -t "cc-use-inner" "$(cat /tmp/cc-use-prompt.txt | tr '\n' ' ')" Enter
+
+# Step 2: Flatten to single line
+flat=$(cat /tmp/cc-use-prompt.txt | tr '\n' ' ')
+
+# Step 3: ALWAYS send text and Enter separately (two steps)
+tmux send-keys -t "cc-use-inner" "$flat"
+sleep 1
+tmux send-keys -t "cc-use-inner" Enter
 ```
 
-```bash
-# Option 2: For short prompts (single line), send directly
-sleep 5
-tmux send-keys -t "cc-use-inner" "Fix the bug in auth.ts where the token is not validated" Enter
-```
-
-**Never send raw multi-line heredocs via `tmux send-keys`** — paste bracketing will eat the Enter key and the prompt won't be submitted.
+**Key rules**:
+- **Always send text and Enter as two separate `send-keys` calls** with a short sleep between them. This works reliably for any length.
+- Short prompts (<500 chars) can use a single `send-keys ... Enter`, but the two-step method works universally, so prefer it.
+- **Never send raw multi-line text** (with actual newlines) via `tmux send-keys` — paste bracketing will eat the Enter.
 
 ### Phase 3: Monitor and Steer (Core Loop)
 
