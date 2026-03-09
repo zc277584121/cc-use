@@ -21,7 +21,16 @@ Outer Claude (you, in .cc-use/)          Inner Claude (in tmux, in project root)
 npx skills add zc277584121/cc-use
 ```
 
-Or manually:
+### Update
+
+```bash
+npx skills add zc277584121/cc-use
+```
+
+Same command as install — it pulls the latest version from the repo and overwrites existing files.
+
+### Manual install
+
 ```bash
 mkdir -p ~/.claude/skills/cc-use
 cp -r skills/cc-use/* ~/.claude/skills/cc-use/
