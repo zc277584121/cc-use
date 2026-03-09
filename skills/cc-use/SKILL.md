@@ -141,18 +141,24 @@ Read the last ~40 lines. Determine the inner Claude's state:
 - **Waiting for permission**: you see a permission dialog → either the user handles it in tmux, or you note it
 - **Error/stuck**: repeated errors or no progress → intervene
 
-**Polling strategy**: Do NOT use long `sleep` calls (sleep 30, sleep 40, etc.) blindly. Instead:
+**Polling strategy**: Use a single Bash call with a silent polling loop. This produces minimal output and counts as ONE tool call in your context, no matter how long it runs.
+
 ```bash
-# Poll with short intervals until state changes
-for i in $(seq 1 30); do
-  output=$(tmux capture-pane -t "cc-use-inner" -p -S -5)
-  if echo "$output" | grep -qE '^❯|^\$'; then
-    break  # Inner Claude is idle, ready for input
+# Silent poll: no stdout during loop, only final status
+# Adjust timeout (120 = 10 minutes at 5s intervals) based on expected task duration
+for i in $(seq 1 120); do
+  output=$(tmux capture-pane -t "cc-use-inner" -p -S -5 2>/dev/null)
+  if echo "$output" | grep -qE '^❯'; then
+    echo "IDLE after $((i*5))s"
+    break
   fi
   sleep 5
 done
+# Only capture output AFTER idle is confirmed
+tmux capture-pane -t "cc-use-inner" -p -S -40
 ```
-This checks every 5 seconds for up to 2.5 minutes, and stops as soon as the inner Claude is idle.
+
+**Why this matters for context**: Each Bash tool call = one context entry. A single silent loop that runs 5 minutes adds ~50 tokens (just the final output). Multiple separate `sleep + capture-pane` calls would each add a full capture to your context.
 
 #### Step 2: Read the response (incremental capture)
 

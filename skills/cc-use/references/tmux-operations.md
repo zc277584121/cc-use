@@ -158,19 +158,24 @@ Read the last few lines of output and look for patterns:
 
 ### Polling until idle (recommended pattern)
 
-Do NOT use blind `sleep 30` calls. Use a polling loop:
+**Key: Keep loops silent to minimize context usage.** Each Bash tool call = one context entry. A silent loop that runs 5 minutes adds ~50 tokens. Multiple separate calls would each add hundreds.
 
 ```bash
-# Wait for inner Claude to become idle (max ~2.5 min)
-for i in $(seq 1 30); do
-  output=$(tmux capture-pane -t "cc-use-inner" -p -S -5)
+# Silent poll — only output on completion. Adjust max iterations for expected task duration.
+# 120 iterations × 5s = 10 minutes max
+for i in $(seq 1 120); do
+  output=$(tmux capture-pane -t "cc-use-inner" -p -S -5 2>/dev/null)
   if echo "$output" | grep -qE '^❯'; then
-    echo "Inner Claude is idle"
+    echo "IDLE after $((i*5))s"
     break
   fi
   sleep 5
 done
+# Capture output only AFTER confirming idle
+tmux capture-pane -t "cc-use-inner" -p -S -40
 ```
+
+**Do NOT** echo or print inside the loop body — that output goes into your context.
 
 ### Polling until Claude process exits (for restart)
 
