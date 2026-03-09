@@ -198,35 +198,70 @@ fi
 
 ### Phase 4: Acceptance Testing
 
-Once the inner Claude reports completion, verify the results yourself:
+**Core principle: Black-box, end-to-end testing. You are the user, not a developer.**
 
-**Level 1 — Automated tests**:
+You should verify like a real user would — interact with the actual system using real data and real environments. Do NOT read source code for verification (that defeats the purpose of delegation). You MAY read documentation, README, API docs, or user-facing guides to understand how things should work.
+
+#### 4.1: Issue reproduction FIRST (for bug fixes)
+
+Before checking the fix, verify the bug existed in the first place:
+- Understand the reported issue from the issue description / TODO
+- Reproduce it end-to-end with real operations (not by reading code)
+- If it can't be reproduced, the fix may be addressing the wrong thing
+
+#### 4.2: End-to-end verification
+
+**Use real environments, real data, real interactions. Avoid mocks.**
+
+For CLI tools / APIs:
 ```bash
-# Run from the project directory
+# Actually run the tool, don't just check code
+cd <project_dir> && <the actual command users would run>
+# Feed it real inputs, not test fixtures
+# Check real outputs, not mock responses
+```
+
+For web applications (requires agent-browser):
+```bash
+which agent-browser || echo "Install: npm i -g agent-browser && agent-browser install"
+
+# Actually navigate, fill forms, click buttons — like a user
+agent-browser open http://localhost:3000
+agent-browser snapshot -i
+agent-browser fill @e1 "real test data"
+agent-browser click @e2
+agent-browser screenshot .cc-use/logs/verification.png
+# Read the screenshot to visually verify
+```
+
+For MCP servers:
+```bash
+# Actually connect and call tools, don't just check the code compiles
+# Start the server, connect a client, make real requests
+```
+
+#### 4.3: Edge case coverage
+
+Don't just test the happy path. Think about boundary conditions and test them end-to-end:
+
+- **Empty / null inputs**: What happens with no data?
+- **Large inputs**: Does it handle scale?
+- **Invalid inputs**: Does it fail gracefully?
+- **Concurrent operations**: Race conditions?
+- **Network / service failures**: What if a dependency is down?
+
+Each edge case should be a real end-to-end test, not a code-level assertion.
+
+#### 4.4: Run existing test suite (supplementary)
+
+After your end-to-end verification, also run the project's test suite as a sanity check:
+```bash
 cd <project_dir> && pytest        # Python
 cd <project_dir> && npm test      # Node.js
 cd <project_dir> && cargo test    # Rust
 ```
 
-**Level 2 — Browser-based verification** (requires agent-browser):
-
-Check if agent-browser is available:
-```bash
-which agent-browser
-```
-
-If not installed, suggest the user to set it up:
-> "Browser verification requires agent-browser. Install it with:
-> `npm install -g agent-browser && agent-browser install`
-> Then add the skill: `npx skills add vercel-labs/agent-browser`"
-
-If available, use it for end-to-end verification:
-```bash
-agent-browser open http://localhost:3000
-agent-browser snapshot -i
-agent-browser screenshot .cc-use/logs/verification.png
-# Then read the screenshot to visually verify
-```
+But remember: passing unit tests does NOT replace end-to-end verification. Unit tests can pass while the actual user experience is broken.
 
 ### Phase 5: Cleanup
 
@@ -327,16 +362,18 @@ When the inner Claude or you make system-level changes, record them in `.cc-use/
 
 - ✅ Read inner Claude's output to understand progress
 - ✅ Send instructions and corrections to inner Claude
-- ✅ Run acceptance tests (tests, browser checks) to verify results
+- ✅ Read documentation, README, API docs, user guides (to understand expected behavior)
+- ✅ Run end-to-end acceptance tests (real commands, browser interactions)
 - ✅ Manage inner Claude's context and lifecycle
-- ❌ Do NOT read project source files yourself (let inner Claude do it)
+- ❌ Do NOT read project source code (let inner Claude do it)
 - ❌ Do NOT edit project files directly (send instructions to inner Claude)
 - ❌ Do NOT debug build errors yourself (tell inner Claude what you see)
 - ❌ Do NOT configure project tooling (tell inner Claude to do it)
+- ❌ Do NOT write or read unit tests / mock-based tests (that's inner Claude's domain)
 
-The whole point of cc-use is to keep implementation details OUT of your context. If you start reading and editing project files, you lose that advantage.
+The whole point of cc-use is to keep implementation details OUT of your context. If you start reading source code, you lose that advantage.
 
-**Exception**: Acceptance testing in Phase 4 — you may directly run tests, use agent-browser, or read specific output files to verify results.
+**You are the user, not the developer.** During acceptance, treat the project as a black box: read its docs to understand what it should do, then verify by actually using it end-to-end with real data and real environments.
 
 ## Crafting Task Prompts for Inner Claude
 
