@@ -55,10 +55,18 @@ my-project/
    ```bash
    mkdir -p .cc-use/state .cc-use/logs
    ```
+
+   **Derive the tmux session name from the project directory name** to avoid conflicts:
+   ```bash
+   # Example: /data2/workspace/my-project → cc-use-my-project
+   project_dir="$(cd .. && pwd)"
+   session_name="cc-use-$(basename "$project_dir")"
+   ```
+
    Write `session-info.json`:
    ```json
    {
-     "tmux_session": "cc-use-inner",
+     "tmux_session": "cc-use-<project-dir-name>",
      "permission_mode": "<user's choice>",
      "started_at": "<ISO timestamp>",
      "project_dir": "<absolute path to project root>"
@@ -68,6 +76,8 @@ my-project/
 3. **Understand the project**: Read `../CLAUDE.md` if it exists, but remember — that file contains instructions for the inner Claude's development work, not directives for you.
 
 ### Phase 2: Launch Inner Claude
+
+**NOTE**: All examples below use `"cc-use-inner"` as the tmux session name. In practice, always use the session name from `session-info.json` (e.g., `cc-use-my-project`).
 
 ```bash
 # Create tmux session pointing to the project root
