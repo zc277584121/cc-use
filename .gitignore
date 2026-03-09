@@ -1,0 +1,14 @@
+# Skills installed by npx skills (not part of this project)
+.agents/
+.claude/skills/agent-browser
+.claude/skills/dogfood
+.claude/skills/electron
+.claude/skills/slack
+skills/agent-browser
+skills/dogfood
+skills/electron
+skills/slack
+skills-lock.json
+
+# Memsearch data
+.memsearch/
