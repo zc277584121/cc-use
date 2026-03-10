@@ -36,17 +36,14 @@ cc-use solves this by **splitting cognition across two layers**: a supervisor th
 
 ## Monitoring: Screen-Diff
 
-### Why not polling?
+The outer Claude monitors the inner Claude by comparing tmux screen snapshots. Instead of asking "is it done?", it asks "what changed?"
 
-The naive approach is to poll `tmux capture-pane` every N seconds and check for the `❯` prompt. Problems:
+Every 10 seconds, the monitor captures the current screen and diffs it against the previous snapshot:
 
-1. **Repeated content**: Each glance captures 40+ lines, most of which were already seen
-2. **All-or-nothing**: You either see everything or nothing — no incremental updates
-3. **Context waste**: Same lines enter outer context again and again
-
-### The screen-diff approach
-
-Instead of asking "is it done?", we ask "what changed?"
+- **Large change (>5 new lines)**: Inner Claude is busy producing output — stay silent, save the new screen
+- **Small change (≤5 new lines)**: Output only the new lines to the outer Claude — incremental, no repeated content
+- **No change + ❯ prompt visible**: Inner Claude is done — declare IDLE
+- **No change, no ❯ prompt**: Inner Claude might be thinking or stuck — wait longer before declaring STUCK
 
 ```mermaid
 flowchart TD
@@ -81,11 +78,7 @@ flowchart TD
 | **STUCK** | No screen change × 6, no ❯ | Might be waiting for permission, hanging, or other issue |
 | **TIMEOUT** | Max iterations reached | Task taking too long, needs intervention |
 
-### Why check ❯ on quiet?
-
-Without the ❯ check, we had **false QUIET detection**: inner Claude pauses for 20+ seconds between tool calls (thinking, planning next step), the screen doesn't change, and the monitor falsely declares "done."
-
-The fix: screen stability alone is not enough. We require both **stable screen** AND **❯ prompt** to declare IDLE. If the screen is stable but no ❯, inner Claude might be thinking — we wait longer before declaring STUCK.
+Requiring both **stable screen** AND **❯ prompt** for IDLE prevents false detection when inner Claude is thinking between tool calls (screen doesn't change but Claude hasn't finished).
 
 ---
 
@@ -100,7 +93,7 @@ When a human checks on a long-running process, they don't read the entire termin
 3. **Scroll up** if needed — "what happened before that?"
 4. **Check logs** if really confused — "give me everything"
 
-cc-use replicates this behavior with 4 tiers:
+cc-use replicates this with 4 tiers, expanding only when needed:
 
 ```mermaid
 flowchart LR
@@ -120,15 +113,15 @@ flowchart LR
 
 **Tier 0 — Status check (automatic)**
 
-Provided by `cc_use_watch` on exit. Shows the last 5 lines of the tmux pane — typically the `❯` prompt and a one-line summary from inner Claude. Enough to answer: "Did it finish? Did it succeed?"
+Provided by `cc_use_watch` on exit. Shows the last 5 lines — typically the `❯` prompt and a summary. Answers: "Did it finish? Did it succeed?"
 
 **Tier 1 — Quick summary**
 
-`cc_use_glance "$session" 10` — shows 10 lines. Usually captures inner Claude's completion summary (e.g., "Created 3 files, all tests pass"). Enough to answer: "What did it accomplish?"
+`cc_use_glance "$session" 10` — 10 lines. Usually captures inner Claude's completion summary. Answers: "What did it accomplish?"
 
 **Tier 2 — Scroll up page by page**
 
-`cc_use_scroll "$session" <page>` — each page is 30 lines with **zero overlap** between pages. Simulates pressing Page Up in a terminal:
+`cc_use_scroll "$session" <page>` — 30 lines per page with **zero overlap**:
 
 ```
 ┌─────────────────────────┐
@@ -144,32 +137,26 @@ Provided by `cc_use_watch` on exit. Shows the last 5 lines of the tmux pane — 
          Bottom of screen
 ```
 
-Key property: **no repeated content** across pages. Each page adds only new information to the outer context.
+Each page adds only new information — no repeated content across pages.
 
 **Tier 3 — Full conversation transcript**
 
-`cc_use_read_conversation "$project_dir"` — parses the inner Claude's JSONL transcript file from `~/.claude/projects/`. Extracts assistant text messages. Use when you need inner Claude's complete reasoning, not just what's visible on screen.
+`cc_use_read_conversation "$project_dir"` — parses inner Claude's JSONL transcript from `~/.claude/projects/`. Use when you need complete reasoning, not just screen output.
 
-### Why this matters for context efficiency
+### Context efficiency
 
-Without progressive disclosure, every monitoring cycle adds ~60 tokens (40-line glance). With it:
-
-| Scenario | Old approach | Progressive |
-|----------|-------------|-------------|
-| Inner completed successfully | 60 tokens (40-line glance) | 5 tokens (Tier 0 auto) |
+| Scenario | Without tiers | With tiers |
+|----------|--------------|------------|
+| Task completed successfully | 60 tokens (40-line glance) | 5 tokens (Tier 0) |
 | Need to understand what happened | 60 tokens (same glance) | 15 tokens (Tier 1) |
-| Need to debug an error | 60 tokens (often not enough) | 45-90 tokens (Tier 2, targeted) |
-| Over 5 monitoring cycles | 300 tokens (mostly repeated) | ~50 tokens (no repeats) |
+| Need to debug an error | 60 tokens (often not enough) | 45-90 tokens (Tier 2) |
+| 5 monitoring cycles | 300 tokens (mostly repeated) | ~50 tokens (no repeats) |
 
 ---
 
 ## Prompt Delivery: Two-Step Send
 
-### The problem
-
-Claude Code's terminal collapses pasted text longer than ~700 characters into `[Pasted text ...]` and does **not** auto-submit it. A single `tmux send-keys "long text" Enter` fails silently for long prompts.
-
-### The solution
+Claude Code collapses pasted text longer than ~700 characters into `[Pasted text ...]` and does not auto-submit it. To reliably deliver prompts of any length, cc-use sends text and Enter as two separate tmux calls:
 
 ```mermaid
 sequenceDiagram
@@ -185,52 +172,43 @@ sequenceDiagram
     Tmux->>Inner: Receives complete prompt
 ```
 
-Prompts are also flattened to a single line (`tr '\n' ' '`) before sending, because multi-line input triggers paste bracketing which interferes with submission.
+Prompts are flattened to a single line (`tr '\n' ' '`) before sending, because multi-line input triggers paste bracketing which interferes with submission.
 
 | Text length | Single send-keys+Enter | Two-step (text, then Enter) |
 |-------------|----------------------|---------------------------|
-| < 500 chars | ✅ Works | ✅ Works |
-| 500-700 chars | ⚠️ Unreliable | ✅ Works |
-| > 700 chars | ❌ Collapsed, not submitted | ✅ Works |
+| < 500 chars | Works | Works |
+| 500-700 chars | Unreliable | Works |
+| > 700 chars | Fails | Works |
 
 ---
 
-## tmux Coordinate System
+## tmux capture-pane Coordinates
 
-A critical implementation detail that caused bugs during development.
-
-### How `capture-pane -S` actually works
+`capture-pane -S` uses tmux's line numbering where **negative numbers go into the scrollback buffer**, not from the bottom of the visible area:
 
 ```
      scrollback buffer
      ─────────────────
--3 → │  line A        │  ← "-S -3" starts HERE (3 lines into scrollback)
+-3 → │  line A        │  ← "-S -3" starts HERE (in scrollback)
 -2 → │  line B        │
 -1 → │  line C        │
      ═════════════════
-      visible area
+      visible area (50 rows)
      ─────────────────
  0 → │  line D        │  ← first visible line
  1 → │  line E        │
- 2 → │  line F        │
      │  ...           │
-49 → │  line Z        │  ← last visible line (50-row pane)
+49 → │  line Z        │  ← last visible line
      ─────────────────
 ```
 
-**`-S -3` does NOT mean "last 3 lines"**. It means "start from 3 lines above the visible area (in scrollback), capture everything down to the bottom." That's 3 + 50 = 53 lines.
-
-**Correct way to get the last N lines:**
+`-S -3` captures 3 scrollback lines + 50 visible lines = 53 lines, **not** "last 3 lines." To get the last N lines:
 
 ```bash
-# ✅ Correct
 tmux capture-pane -t "$session" -p | tail -N
-
-# ❌ Wrong — captures scrollback + full visible area
-tmux capture-pane -t "$session" -p -S -N
 ```
 
-This affects all reading functions: `glance`, `scroll`, `is_idle`, `wait_shell`.
+All cc-use reading functions (`glance`, `scroll`, `is_idle`, `wait_shell`) use this `| tail` pattern.
 
 ---
 
@@ -275,12 +253,13 @@ stateDiagram-v2
 ```
 my-project/
 ├── .cc-use/
+│   ├── CLAUDE.md                  # Auto-generated: instructs outer Claude to use cc-use
 │   └── state/
 │       ├── session-info.json      # Session config (name, perms, project path)
 │       ├── last-screen.txt        # Previous tmux snapshot (for diffing)
 │       └── env-changes.md         # System-level change log
 │
-├── CLAUDE.md                      # Inner Claude's instructions
+├── CLAUDE.md                      # Inner Claude's instructions (project-specific)
 └── (project files...)
 
 ~/.claude/projects/<mangled-path>/
@@ -290,16 +269,15 @@ my-project/
 
 ---
 
-## Design Decisions Summary
+## Design Decisions
 
-| Decision | Alternative considered | Why we chose this |
-|----------|----------------------|-------------------|
-| Screen-diff over polling | Poll for ❯ every 5s | Avoids repeated content, provides incremental updates |
-| ❯ check on quiet | Screen stability alone | Prevents false QUIET when inner Claude is thinking |
-| 4-tier progressive reading | Always capture 40 lines | Minimizes context — most cycles only need Tier 0 |
-| No-overlap scroll pages | Fixed-size glance | Simulates human scrolling, never re-reads old content |
-| Two-step prompt send | Single send-keys+Enter | Reliable for any prompt length (>700 chars fail otherwise) |
-| `tail -N` over `-S -N` | tmux native `-S` flag | `-S -N` goes into scrollback, not "last N lines" |
-| No pipe-pane logging | Full output logging | Raw ANSI escape codes are unreadable; screen capture is cleaner |
-| No `[CC-USE]` prefix | Prefix on all sent prompts | Prefix triggered recursive skill activation in inner Claude |
-| Auto-confirm trust dialog | Manual user intervention | `--dangerously-skip-permissions` doesn't skip the trust dialog |
+| Decision | Rationale |
+|----------|-----------|
+| Screen-diff monitoring | Provides incremental updates without repeated content |
+| ❯ prompt required for IDLE | Screen stability alone isn't enough — Claude pauses between tool calls |
+| 4-tier progressive reading | Most cycles only need 5-15 tokens; expand on demand |
+| No-overlap scroll pages | Simulates human Page Up; each page adds only new info |
+| Two-step prompt send | Single send-keys+Enter fails for text >700 chars |
+| `capture-pane \| tail -N` | tmux `-S -N` enters scrollback, not "last N lines" |
+| No pipe-pane logging | Raw terminal output contains unreadable ANSI escape codes |
+| Auto-confirm trust dialog | `--dangerously-skip-permissions` doesn't skip the initial trust prompt |
