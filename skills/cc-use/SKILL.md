@@ -126,8 +126,8 @@ Your multi-line task prompt here...
 Can be as long as needed.
 PROMPT
 
-# Step 2: Flatten to single line
-flat=$(cat /tmp/cc-use-prompt.txt | tr '\n' ' ')
+# Step 2: Flatten to single line and add prefix tag
+flat="[CC-USE] $(cat /tmp/cc-use-prompt.txt | tr '\n' ' ')"
 
 # Step 3: ALWAYS send text and Enter separately (two steps)
 tmux send-keys -t "cc-use-inner" "$flat"
@@ -137,6 +137,7 @@ tmux send-keys -t "cc-use-inner" Enter
 
 **Key rules**:
 - **Always send text and Enter as two separate `send-keys` calls** with a short sleep between them. This works reliably for any length.
+- **Always prefix your prompts with `[CC-USE]`** so you can distinguish your instructions from inner Claude's own output when reading `capture-pane` or logs.
 - Short prompts (<500 chars) can use a single `send-keys ... Enter`, but the two-step method works universally, so prefer it.
 - **Never send raw multi-line text** (with actual newlines) via `tmux send-keys` — paste bracketing will eat the Enter.
 

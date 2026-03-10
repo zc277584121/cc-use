@@ -53,7 +53,8 @@ Fix token validation in auth.ts
 All tests in tests/auth/ pass
 PROMPT
 
-flat=$(cat /tmp/cc-use-prompt.txt | tr '\n' ' ')
+# Add [CC-USE] prefix to distinguish your instructions from inner output
+flat="[CC-USE] $(cat /tmp/cc-use-prompt.txt | tr '\n' ' ')"
 tmux send-keys -t "cc-use-inner" "$flat"
 sleep 1
 tmux send-keys -t "cc-use-inner" Enter
