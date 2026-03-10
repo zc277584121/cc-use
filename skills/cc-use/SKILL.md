@@ -62,6 +62,7 @@ Key functions:
 | `cc_use_send_file <session> <file>` | Send prompt from file |
 | `cc_use_cmd <session> "/command"` | Send a slash command |
 | `cc_use_glance <session> [lines]` | Quick screen capture (default 40 lines) |
+| `cc_use_read_conversation <project_dir> [last_n]` | Read last N assistant messages from JSONL transcript (Tier 3) |
 | `cc_use_watch <session> <state_dir> [interval] [quiet] [max] [threshold]` | Screen-diff monitor: blocks until quiet, outputs only incremental changes |
 | `cc_use_is_idle <session>` | Check if inner Claude is at ❯ prompt (exit code 0 = idle) |
 | `cc_use_wait_idle <session> [max_iter] [interval]` | Silent poll until idle (default 10min) |
@@ -143,15 +144,18 @@ This is a **single Bash call** that monitors via screen-diff:
 
 **Result**: you see only incremental updates during the wait, and a status line at the end. Typical context usage: ~20-50 tokens per cycle.
 
-#### Step 1b: If you need more context after watch returns
+#### Step 1b: Progressive reading (expand only if needed)
 
-Use progressive (tiered) reading — only expand if the watch output wasn't enough:
+`cc_use_watch` already gives you Tier 0 (last 3 lines) on exit. Only expand if that's not enough:
 
-```bash
-source <skill_dir>/scripts/cc-use-lib.sh
-cc_use_glance "$session_name" 10    # Tier 1: last 10 lines (~15 tokens)
-cc_use_glance "$session_name" 40    # Tier 2: last 40 lines (~60 tokens)
-```
+| Tier | What | When to use | Context cost |
+|------|------|-------------|-------------|
+| **0** | Last 3 lines (auto from `cc_use_watch`) | Always — confirms ❯ / Allow? / error | ~5 tokens |
+| **1** | `cc_use_glance "$session" 10` | Need a quick summary of what happened | ~15 tokens |
+| **2** | `cc_use_glance "$session" 40` | Need more detail (error traces, test output) | ~60 tokens |
+| **3** | `cc_use_read_conversation "$project_dir"` | Need full assistant response (JSONL parsing) | varies |
+
+**Rule: start from Tier 0, only go deeper if information is insufficient.** Most monitoring cycles only need Tier 0 or 1.
 
 #### Step 2: Decide next action
 

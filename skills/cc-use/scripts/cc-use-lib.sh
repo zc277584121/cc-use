@@ -115,6 +115,46 @@ cc_use_glance() {
   tmux capture-pane -t "$session" -p -S "-$lines"
 }
 
+cc_use_read_conversation() {
+  # Read inner Claude's conversation from its JSONL transcript (Tier 3).
+  # Finds the most recent transcript for the given project dir and extracts
+  # the last N assistant messages as clean text.
+  #
+  # Usage: cc_use_read_conversation <project_dir> [last_n_messages]
+  # Default: last 1 message
+  local project_dir="$1"
+  local last_n="${2:-1}"
+
+  # Claude Code stores transcripts in ~/.claude/projects/<mangled-path>/
+  # The path is the project dir with / replaced by -
+  local mangled
+  mangled=$(echo "$project_dir" | sed 's|^/||; s|/|-|g')
+  local transcript_dir="$HOME/.claude/projects/$mangled"
+
+  if [ ! -d "$transcript_dir" ]; then
+    echo "No transcript directory found at $transcript_dir"
+    return 1
+  fi
+
+  # Find the most recently modified .jsonl file
+  local latest
+  latest=$(ls -t "$transcript_dir"/*.jsonl 2>/dev/null | head -1)
+
+  if [ -z "$latest" ]; then
+    echo "No transcript files found"
+    return 1
+  fi
+
+  echo "=== Transcript: $(basename "$latest") ==="
+  # Extract assistant text messages, get last N
+  jq -r '
+    select(.type == "assistant")
+    | .message.content[]
+    | select(.type == "text")
+    | .text
+  ' "$latest" 2>/dev/null | tail -n "$last_n"
+}
+
 # --- Screen-Diff Based Monitoring ---
 
 cc_use_watch() {
