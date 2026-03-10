@@ -114,41 +114,55 @@ The outer Claude keeps track of which files need changing and runs end-to-end te
 
 ## Install
 
+**Step 1: Install the skill**
+
 ```bash
 npx skills add zc277584121/cc-use
+```
+
+**Step 2: Install the `ccu` command**
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/zc277584121/cc-use/main/ccu -o ~/.local/bin/ccu && chmod +x ~/.local/bin/ccu
+```
+
+If `~/.local/bin` is not in your PATH, add it:
+
+```bash
+echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc  # or ~/.zshrc
+source ~/.bashrc
 ```
 
 ### Update
 
 ```bash
+# Update skill
 npx skills add zc277584121/cc-use
-```
 
-Same command as install — it pulls the latest version and overwrites existing files.
-
-### Manual install
-
-```bash
-mkdir -p ~/.claude/skills/cc-use
-cp -r skills/cc-use/* ~/.claude/skills/cc-use/
+# Update ccu command
+curl -fsSL https://raw.githubusercontent.com/zc277584121/cc-use/main/ccu -o ~/.local/bin/ccu && chmod +x ~/.local/bin/ccu
 ```
 
 ## Usage
 
 ```bash
-# From your project directory
-mkdir -p .cc-use
-cd .cc-use && claude
+cd your-project
+
+# Interactive mode — tell Claude your goal after it starts
+ccu
+
+# Or pass the task directly
+ccu "Fix the auth bug in issue #142"
 ```
 
-Then tell Claude your goal. The skill guides it to:
+The skill guides Claude to:
 1. Ask your preferred permission mode for the inner Claude
 2. Launch an inner Claude in tmux
-3. Monitor progress and steer as needed
+3. Monitor progress via screen-diff (minimal context usage)
 4. Run end-to-end acceptance tests
 5. Report results
 
-You can open the tmux session anytime to see what the inner Claude is doing:
+You can watch the inner Claude anytime:
 ```bash
 tmux attach -t cc-use-<your-project-name>
 ```
