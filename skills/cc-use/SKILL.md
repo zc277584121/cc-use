@@ -28,7 +28,7 @@ A single Claude session accumulates all file reads, edits, command outputs, and 
 
 ### Context isolation principle
 
-Inner Claude's tool calls (Read, Edit, Bash outputs) **never enter your context**. You only see ~40 lines of tmux output per monitoring cycle. A silent polling loop that waits 5 minutes adds only ~50 tokens to your context — the same as a single short command.
+Inner Claude's tool calls (Read, Edit, Bash outputs) **never enter your context**. You monitor via screen-diff: comparing tmux snapshots and only seeing incremental changes. A monitoring cycle that waits 5 minutes typically adds only ~20-50 tokens to your context.
 
 When the inner Claude's context fills up, you restart it with a fresh session and re-send a brief task prompt. The inner Claude picks up where it left off with a clean window. This makes the overall workflow length **no longer bounded by context limits**.
 
@@ -55,14 +55,14 @@ Key functions:
 
 | Function | Purpose |
 |----------|---------|
-| `cc_use_launch <session> <project_dir> <log_file> [perm_flags]` | Create tmux session and start claude |
+| `cc_use_launch <session> <project_dir> <state_dir> [perm_flags]` | Create tmux session and start claude |
 | `cc_use_stop <session>` | Gracefully exit claude and kill session |
 | `cc_use_restart <session> [perm_flags]` | Restart claude (for config changes), restores window size |
 | `cc_use_send <session> "prompt text"` | Send prompt with `[CC-USE]` prefix, handles long text |
 | `cc_use_send_file <session> <file>` | Send prompt from file |
 | `cc_use_cmd <session> "/command"` | Send a slash command |
 | `cc_use_glance <session> [lines]` | Quick screen capture (default 40 lines) |
-| `cc_use_read_incremental <log> <offset_file> [max_lines]` | Read only new output since last check |
+| `cc_use_watch <session> <state_dir> [interval] [quiet] [max] [threshold]` | Screen-diff monitor: blocks until quiet, outputs only incremental changes |
 | `cc_use_is_idle <session>` | Check if inner Claude is at ❯ prompt (exit code 0 = idle) |
 | `cc_use_wait_idle <session> [max_iter] [interval]` | Silent poll until idle (default 10min) |
 | `cc_use_wait_shell <session> [max_iter]` | Wait for claude to exit to shell |
@@ -75,11 +75,10 @@ You operate from the `.cc-use/` directory inside the user's project:
 ```
 my-project/
 ├── .cc-use/                          # Your working directory
-│   ├── state/
-│   │   ├── session-info.json         # tmux session config and permission mode
-│   │   └── env-changes.md           # Track environment modifications for rollback
-│   └── logs/
-│       └── inner-output.log          # Full output captured via pipe-pane
+│   └── state/
+│       ├── session-info.json         # tmux session config and permission mode
+│       ├── last-screen.txt           # Last captured tmux screen (for diff monitoring)
+│       └── env-changes.md            # Track environment modifications for rollback
 ├── CLAUDE.md                         # Project's own instructions (for inner Claude)
 └── (project files...)
 ```
@@ -95,7 +94,7 @@ my-project/
 
 2. **Create state directory and derive session name**:
    ```bash
-   mkdir -p .cc-use/state .cc-use/logs
+   mkdir -p .cc-use/state
    project_dir="$(cd .. && pwd)"
    session_name="cc-use-$(basename "$project_dir")"
    ```
@@ -107,7 +106,7 @@ my-project/
 
 ```bash
 source <skill_dir>/scripts/cc-use-lib.sh
-cc_use_launch "$session_name" "$project_dir" "$(pwd)/logs/inner-output.log" "--dangerously-skip-permissions"
+cc_use_launch "$session_name" "$project_dir" "$(pwd)/state" "--dangerously-skip-permissions"
 ```
 
 Wait for Claude to be ready, then send the task prompt:
@@ -129,15 +128,30 @@ cc_use_send_file "$session_name" /tmp/cc-use-prompt.txt
 
 Repeat this cycle until the goal is achieved:
 
-#### Step 1: Wait for inner Claude to finish, then read output
+#### Step 1: Watch for inner Claude to finish
 
 ```bash
 source <skill_dir>/scripts/cc-use-lib.sh
-cc_use_wait_idle "$session_name" 120 5
-cc_use_glance "$session_name"
+cc_use_watch "$session_name" "$(pwd)/state"
 ```
 
-This is a **single Bash call** that silently polls for up to 10 minutes, then shows the last 40 lines. Minimal context usage.
+This is a **single Bash call** that monitors via screen-diff:
+- Every 10s, captures the tmux screen and compares with the previous snapshot
+- **Large changes (>5 new lines)**: inner Claude is busy — stays silent, continues watching
+- **Small changes (≤5 new lines)**: outputs only the new lines to you (incremental, no repeat)
+- **No change for 2 consecutive checks**: exits with last 3 lines (status confirmation)
+
+**Result**: you see only incremental updates during the wait, and a status line at the end. Typical context usage: ~20-50 tokens per cycle.
+
+#### Step 1b: If you need more context after watch returns
+
+Use progressive (tiered) reading — only expand if the watch output wasn't enough:
+
+```bash
+source <skill_dir>/scripts/cc-use-lib.sh
+cc_use_glance "$session_name" 10    # Tier 1: last 10 lines (~15 tokens)
+cc_use_glance "$session_name" 40    # Tier 2: last 40 lines (~60 tokens)
+```
 
 #### Step 2: Decide next action
 

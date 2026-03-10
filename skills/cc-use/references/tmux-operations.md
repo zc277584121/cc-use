@@ -10,9 +10,6 @@ tmux new-session -d -s "cc-use-inner" -c "/path/to/project" -x 220 -y 50
 # Increase scrollback buffer (default 2000 is too small)
 tmux set-option -t "cc-use-inner" history-limit 50000
 
-# Start output logging BEFORE launching claude
-tmux pipe-pane -t "cc-use-inner" -o 'cat >> /path/to/.cc-use/logs/inner-output.log'
-
 # Launch claude
 tmux send-keys -t "cc-use-inner" "claude --dangerously-skip-permissions" Enter
 ```
@@ -94,8 +91,6 @@ sleep 3
 # Kill session (if exit doesn't work)
 tmux kill-session -t "cc-use-inner"
 
-# Stop output logging
-tmux pipe-pane -t "cc-use-inner"
 ```
 
 ## Reading Output
@@ -115,15 +110,15 @@ tmux capture-pane -t "cc-use-inner" -p -S -200
 tmux capture-pane -t "cc-use-inner" -p -S -
 ```
 
-### Incremental log reading
-The `pipe-pane` log file captures everything. Read incrementally by tracking byte offset:
+### Screen-diff monitoring (recommended)
 
-```bash
-# Read new content since last check
-offset=$(cat .cc-use/state/log-offset 2>/dev/null || echo 0)
-tail -c +$((offset + 1)) .cc-use/logs/inner-output.log | tail -200
-wc -c < .cc-use/logs/inner-output.log > .cc-use/state/log-offset
-```
+Instead of polling for idle state, use `cc_use_watch` which compares screen snapshots:
+- Captures screen every N seconds, diffs against previous snapshot
+- Small diffs (≤5 lines): outputs incrementally — outer Claude sees only new content
+- Large diffs (>5 lines): inner Claude is busy, stays silent
+- No diff for consecutive checks: screen is stable, exits
+
+This avoids repeating previously-seen output and minimizes outer context usage.
 
 ### Important notes on output capture
 - `tmux capture-pane` captures what's **currently rendered** on screen

@@ -6,10 +6,10 @@
 
 cc_use_launch() {
   # Launch inner Claude in a new tmux session
-  # Usage: cc_use_launch <session_name> <project_dir> <log_file> <permission_flags>
+  # Usage: cc_use_launch <session_name> <project_dir> <state_dir> [permission_flags]
   local session="$1"
   local project_dir="$2"
-  local log_file="$3"
+  local state_dir="$3"
   local perm_flags="${4:-}"
 
   # Kill existing session if any
@@ -19,9 +19,8 @@ cc_use_launch() {
   tmux new-session -d -s "$session" -c "$project_dir" -x 220 -y 50
   tmux set-option -t "$session" history-limit 50000
 
-  # Start logging
-  : > "$log_file"
-  tmux pipe-pane -t "$session" -o "cat >> $log_file"
+  # Clear screen snapshot state
+  rm -f "$state_dir/last-screen.txt"
 
   # Launch claude
   if [ -n "$perm_flags" ]; then
@@ -46,7 +45,7 @@ cc_use_stop() {
 
 cc_use_restart() {
   # Restart inner Claude (for config changes that need restart)
-  # Usage: cc_use_restart <session_name> <permission_flags>
+  # Usage: cc_use_restart <session_name> [permission_flags]
   local session="$1"
   local perm_flags="${2:-}"
 
@@ -108,7 +107,7 @@ cc_use_cmd() {
 # --- Reading Output ---
 
 cc_use_glance() {
-  # Quick glance at inner Claude's current screen (~40 lines)
+  # Quick glance at inner Claude's current screen
   # Usage: cc_use_glance <session_name> [lines]
   local session="$1"
   local lines="${2:-40}"
@@ -116,20 +115,73 @@ cc_use_glance() {
   tmux capture-pane -t "$session" -p -S "-$lines"
 }
 
-cc_use_read_incremental() {
-  # Read only NEW output since last check (via byte offset tracking)
-  # Usage: cc_use_read_incremental <log_file> <offset_file> [max_lines]
-  local log_file="$1"
-  local offset_file="$2"
-  local max_lines="${3:-200}"
+# --- Screen-Diff Based Monitoring ---
 
-  local offset=0
-  if [ -f "$offset_file" ]; then
-    offset=$(cat "$offset_file")
-  fi
+cc_use_watch() {
+  # Monitor inner Claude via screen snapshot diffs.
+  # Blocks until screen is stable (no changes for quiet_count consecutive checks).
+  # Outputs only incremental changes (≤ threshold lines) to minimize context usage.
+  # Large changes (> threshold) are silently absorbed — inner Claude is clearly busy.
+  #
+  # Usage: cc_use_watch <session_name> <state_dir> [interval] [quiet_count] [max_iter] [diff_threshold]
+  # Defaults: interval=10s, quiet_count=2, max_iter=60 (=10min), diff_threshold=5
+  local session="$1"
+  local state_dir="$2"
+  local interval="${3:-10}"
+  local quiet_count="${4:-2}"
+  local max_iter="${5:-60}"
+  local diff_threshold="${6:-5}"
 
-  tail -c +$((offset + 1)) "$log_file" | tail -"$max_lines"
-  wc -c < "$log_file" > "$offset_file"
+  local screen_file="$state_dir/last-screen.txt"
+  local curr_file
+  curr_file=$(mktemp)
+  trap "rm -f '$curr_file'" RETURN
+
+  local consecutive_same=0
+
+  for i in $(seq 1 "$max_iter"); do
+    # Capture current screen
+    tmux capture-pane -t "$session" -p -S -40 > "$curr_file" 2>/dev/null
+
+    if [ ! -f "$screen_file" ]; then
+      # First check — save baseline, no output
+      cp "$curr_file" "$screen_file"
+      sleep "$interval"
+      continue
+    fi
+
+    # Compare with previous screen
+    local new_lines
+    new_lines=$(diff "$screen_file" "$curr_file" 2>/dev/null | grep '^>' | sed 's/^> //')
+    local new_count
+    new_count=$(echo "$new_lines" | grep -c . 2>/dev/null || echo 0)
+
+    if [ "$new_count" -eq 0 ]; then
+      # No change
+      consecutive_same=$((consecutive_same + 1))
+      if [ "$consecutive_same" -ge "$quiet_count" ]; then
+        echo "QUIET after $((i * interval))s"
+        # Output final status (Tier 0: last 3 lines)
+        tmux capture-pane -t "$session" -p -S -3
+        return 0
+      fi
+    elif [ "$new_count" -le "$diff_threshold" ]; then
+      # Small change — output the diff for outer Claude
+      consecutive_same=0
+      echo "$new_lines"
+      cp "$curr_file" "$screen_file"
+    else
+      # Large change (>threshold lines) — inner is busy, stay silent
+      consecutive_same=0
+      cp "$curr_file" "$screen_file"
+    fi
+
+    sleep "$interval"
+  done
+
+  echo "TIMEOUT after $((max_iter * interval))s"
+  tmux capture-pane -t "$session" -p -S -3
+  return 1
 }
 
 # --- State Detection ---
