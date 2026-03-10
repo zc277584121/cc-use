@@ -141,9 +141,14 @@ This is a **single Bash call** that monitors via screen-diff:
 - Every 10s, captures the tmux screen and compares with the previous snapshot
 - **Large changes (>5 new lines)**: inner Claude is busy — stays silent, continues watching
 - **Small changes (≤5 new lines)**: outputs only the new lines to you (incremental, no repeat)
-- **No change for 2 consecutive checks**: exits with last 3 lines (status confirmation)
+- **No change for 3 consecutive checks + ❯ visible**: exits with IDLE status
 
-**Result**: you see only incremental updates during the wait, and a status line at the end. Typical context usage: ~20-50 tokens per cycle.
+**The output you receive is a concatenation of:**
+1. Incremental diffs (small changes observed during monitoring)
+2. A status line: `IDLE after Xs`, `STUCK after Xs`, or `TIMEOUT after Xs`
+3. Tier 0: a few lines of inner Claude's actual output (UI decoration filtered out)
+
+Note: Some incremental diffs may be Claude Code UI refreshes (progress timers, spinner changes) rather than meaningful content — this is normal noise. Typical context usage: ~20-50 tokens per cycle.
 
 #### Step 1b: Progressive reading (expand only if needed)
 
@@ -151,7 +156,7 @@ This is a **single Bash call** that monitors via screen-diff:
 
 | Tier | What | When to use | Context cost |
 |------|------|-------------|-------------|
-| **0** | Last 3 lines (auto from `cc_use_watch`) | Always — confirms ❯ / Allow? / error | ~5 tokens |
+| **0** | Auto from `cc_use_watch` (filtered, up to 8 lines) | Always — shows inner Claude's last response summary | ~10 tokens |
 | **1** | `cc_use_glance "$session" 10` | Need a quick summary of what happened | ~15 tokens |
 | **2** | `cc_use_scroll "$session" 0` then `1`, `2`... | Scroll up page by page (30 lines each, no overlap) | ~45 tokens/page |
 | **3** | `cc_use_read_conversation "$project_dir"` | Need full assistant response (JSONL parsing) | varies |

@@ -253,8 +253,8 @@ cc_use_watch() {
         consecutive_same=$((consecutive_same + 1))
         if [ "$consecutive_same" -ge "$quiet_count" ]; then
           echo "IDLE after $((i * interval))s"
-          # Output Tier 0: last 5 lines for status
-          tail -5 "$curr_file"
+          # Output Tier 0: last 15 lines, filtered to remove UI decoration
+          tail -15 "$curr_file" | grep -vE '^[─━─]{5,}|^[[:space:]]*$|⏵⏵|^\s*$' | head -8
           cp "$curr_file" "$screen_file"
           return 0
         fi
@@ -264,7 +264,7 @@ cc_use_watch() {
         if [ "$consecutive_same" -ge $((quiet_count * 2)) ]; then
           # Extended quiet without ❯ — probably stuck
           echo "STUCK after $((i * interval))s (no ❯ prompt)"
-          tail -10 "$curr_file"
+          tail -15 "$curr_file" | grep -vE '^[─━─]{5,}|^[[:space:]]*$|⏵⏵' | head -8
           cp "$curr_file" "$screen_file"
           return 2
         fi
@@ -284,7 +284,7 @@ cc_use_watch() {
   done
 
   echo "TIMEOUT after $((max_iter * interval))s"
-  tail -5 "$curr_file"
+  tail -15 "$curr_file" | grep -vE '^[─━─]{5,}|^[[:space:]]*$|⏵⏵' | head -8
   cp "$curr_file" "$screen_file"
   return 1
 }
