@@ -279,6 +279,7 @@ Write clear, focused prompts. Include only what the inner Claude needs:
 ## References
 
 For detailed guidance on specific topics, see:
+- @references/architecture.md — design philosophy, screen-diff monitoring, progressive disclosure
 - @references/tmux-operations.md — tmux commands and patterns
 - @references/environment-management.md — environment tracking and rollback
 - @references/acceptance-testing.md — verification strategies
