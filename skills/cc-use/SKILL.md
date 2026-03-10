@@ -46,10 +46,8 @@ Think of yourself as a **tech lead**, not an implementer:
 All tmux operations are provided as shell functions in `scripts/cc-use-lib.sh`. **Source it first** in any Bash call:
 
 ```bash
-source <skill_dir>/scripts/cc-use-lib.sh
+source ${CLAUDE_SKILL_DIR}/scripts/cc-use-lib.sh
 ```
-
-Where `<skill_dir>` is the path to this skill's directory (find it with `find ~/.claude/skills -name cc-use-lib.sh` if needed).
 
 Key functions:
 
@@ -107,7 +105,7 @@ my-project/
 ### Phase 2: Launch Inner Claude
 
 ```bash
-source <skill_dir>/scripts/cc-use-lib.sh
+source ${CLAUDE_SKILL_DIR}/scripts/cc-use-lib.sh
 cc_use_launch "$session_name" "$project_dir" "$(pwd)/state" "--dangerously-skip-permissions"
 ```
 
@@ -133,7 +131,7 @@ Repeat this cycle until the goal is achieved:
 #### Step 1: Watch for inner Claude to finish
 
 ```bash
-source <skill_dir>/scripts/cc-use-lib.sh
+source ${CLAUDE_SKILL_DIR}/scripts/cc-use-lib.sh
 cc_use_watch "$session_name" "$(pwd)/state"
 ```
 
@@ -185,7 +183,7 @@ cc_use_scroll "$session" 2     # page 2: even further back
 **WARNING — Command accumulation**: Always check idle state before sending. If you send commands while inner Claude is busy, they queue and fire in rapid succession.
 
 ```bash
-source <skill_dir>/scripts/cc-use-lib.sh
+source ${CLAUDE_SKILL_DIR}/scripts/cc-use-lib.sh
 cc_use_is_idle "$session_name" && cc_use_send "$session_name" "Next instruction..."
 ```
 
@@ -208,7 +206,7 @@ See @references/acceptance-testing.md for detailed patterns and examples.
 ### Phase 5: Cleanup
 
 ```bash
-source <skill_dir>/scripts/cc-use-lib.sh
+source ${CLAUDE_SKILL_DIR}/scripts/cc-use-lib.sh
 cc_use_stop "$session_name"
 ```
 

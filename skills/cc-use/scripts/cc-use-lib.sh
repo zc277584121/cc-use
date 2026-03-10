@@ -254,7 +254,7 @@ cc_use_watch() {
         if [ "$consecutive_same" -ge "$quiet_count" ]; then
           echo "IDLE after $((i * interval))s"
           # Output Tier 0: last 15 lines, filtered to remove UI decoration
-          tail -15 "$curr_file" | grep -vE '^[─━─]{5,}|^[[:space:]]*$|⏵⏵|^\s*$' | head -8
+          tail -15 "$curr_file" | grep -vE '^[─━]{3,}|^[[:space:]]*$|⏵⏵|^\s*$|^[·✢\*☐☑⏳⚡★✦●◆▶▸►⏵※†‡] .*…|^\? for shortcuts|Worked for|Cogitated for|Sautéed for|Moonwalking' | head -8
           cp "$curr_file" "$screen_file"
           return 0
         fi
@@ -270,9 +270,13 @@ cc_use_watch() {
         fi
       fi
     elif [ "$new_count" -le "$diff_threshold" ]; then
-      # Small change — output the diff for outer Claude
+      # Small change — filter TUI noise, output meaningful diff only
       consecutive_same=0
-      echo "$new_lines"
+      local filtered
+      filtered=$(printf '%s\n' "$new_lines" | grep -vE '^[─━]{3,}|^[[:space:]]*$|⏵⏵|^\s*$|^[·✢\*☐☑⏳⚡★✦●◆▶▸►⏵※†‡] .*…|^\? for shortcuts|Worked for|Cogitated for|Sautéed for|Moonwalking')
+      if [ -n "$filtered" ]; then
+        echo "$filtered"
+      fi
       cp "$curr_file" "$screen_file"
     else
       # Large change (>threshold lines) — inner is busy, stay silent
