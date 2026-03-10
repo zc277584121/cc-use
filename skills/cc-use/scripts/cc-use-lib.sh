@@ -107,12 +107,41 @@ cc_use_cmd() {
 # --- Reading Output ---
 
 cc_use_glance() {
-  # Quick glance at inner Claude's current screen
+  # Quick glance at inner Claude's current screen (from bottom)
   # Usage: cc_use_glance <session_name> [lines]
   local session="$1"
   local lines="${2:-40}"
 
   tmux capture-pane -t "$session" -p -S "-$lines"
+}
+
+cc_use_scroll() {
+  # Page through tmux scrollback like scrolling up in a terminal.
+  # Each call returns a non-overlapping page of output.
+  #
+  # Usage: cc_use_scroll <session_name> <page> [page_size]
+  # page=0: bottom (most recent), page=1: one page up, page=2: two pages up, ...
+  # Default page_size: 30 lines
+  #
+  # Example — read bottom 3 pages without overlap:
+  #   cc_use_scroll "$session" 0    # lines -30 to 0   (most recent)
+  #   cc_use_scroll "$session" 1    # lines -60 to -31
+  #   cc_use_scroll "$session" 2    # lines -90 to -61
+  local session="$1"
+  local page="${2:-0}"
+  local page_size="${3:-30}"
+
+  local end_offset=$(( page * page_size ))
+  local start_offset=$(( end_offset + page_size ))
+
+  # -S = start line (negative = from bottom), -E = end line
+  # For page 0: -S -30 -E -1  (last 30 lines, excluding prompt line)
+  # For page 1: -S -60 -E -31
+  if [ "$end_offset" -eq 0 ]; then
+    tmux capture-pane -t "$session" -p -S "-$start_offset"
+  else
+    tmux capture-pane -t "$session" -p -S "-$start_offset" -E "-$((end_offset + 1))"
+  fi
 }
 
 cc_use_read_conversation() {
