@@ -222,8 +222,11 @@ cc_use_watch() {
     # Compare with previous screen
     local new_lines
     new_lines=$(diff "$screen_file" "$curr_file" 2>/dev/null | grep '^>' | sed 's/^> //')
-    local new_count
-    new_count=$(echo "$new_lines" | grep -c . 2>/dev/null || echo 0)
+    local new_count=0
+    if [ -n "$new_lines" ]; then
+      new_count=$(printf '%s\n' "$new_lines" | wc -l)
+      new_count=$((new_count + 0))  # ensure integer
+    fi
 
     if [ "$new_count" -eq 0 ]; then
       # No change
