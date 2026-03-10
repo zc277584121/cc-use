@@ -1,6 +1,13 @@
 #!/usr/bin/env bash
 # cc-use helper functions for managing inner Claude via tmux
 # Source this file: source <path>/cc-use-lib.sh
+#
+# NOTE on tmux capture-pane coordinates:
+#   -S/-E use tmux's line numbering where 0 = first visible line,
+#   and NEGATIVE numbers go INTO scrollback (above visible area).
+#   So "-S -3" does NOT mean "last 3 lines" — it means "3 lines of
+#   scrollback + entire visible area". To get the last N lines,
+#   always use: tmux capture-pane -p | tail -N
 
 # --- Session Management ---
 
@@ -32,7 +39,7 @@ cc_use_launch() {
   # Auto-confirm "trust this folder" dialog if it appears
   sleep 5
   local screen
-  screen=$(tmux capture-pane -t "$session" -p -S -10 2>/dev/null)
+  screen=$(tmux capture-pane -t "$session" -p 2>/dev/null)
   if echo "$screen" | grep -q "Yes, I trust this folder"; then
     tmux send-keys -t "$session" Enter
   fi
@@ -117,16 +124,16 @@ cc_use_cmd() {
 # --- Reading Output ---
 
 cc_use_glance() {
-  # Quick glance at inner Claude's current screen (from bottom)
+  # Quick glance at inner Claude's current screen (last N lines)
   # Usage: cc_use_glance <session_name> [lines]
   local session="$1"
   local lines="${2:-40}"
 
-  tmux capture-pane -t "$session" -p -S "-$lines"
+  tmux capture-pane -t "$session" -p 2>/dev/null | tail -"$lines"
 }
 
 cc_use_scroll() {
-  # Page through tmux scrollback like scrolling up in a terminal.
+  # Page through tmux output like scrolling up in a terminal.
   # Each call returns a non-overlapping page of output.
   #
   # Usage: cc_use_scroll <session_name> <page> [page_size]
@@ -134,23 +141,25 @@ cc_use_scroll() {
   # Default page_size: 30 lines
   #
   # Example — read bottom 3 pages without overlap:
-  #   cc_use_scroll "$session" 0    # lines -30 to 0   (most recent)
-  #   cc_use_scroll "$session" 1    # lines -60 to -31
-  #   cc_use_scroll "$session" 2    # lines -90 to -61
+  #   cc_use_scroll "$session" 0    # most recent 30 lines
+  #   cc_use_scroll "$session" 1    # previous 30 lines (no overlap)
+  #   cc_use_scroll "$session" 2    # even further back
   local session="$1"
   local page="${2:-0}"
   local page_size="${3:-30}"
 
-  local end_offset=$(( page * page_size ))
-  local start_offset=$(( end_offset + page_size ))
+  local skip_from_end=$(( page * page_size ))
 
-  # -S = start line (negative = from bottom), -E = end line
-  # For page 0: -S -30 -E -1  (last 30 lines, excluding prompt line)
-  # For page 1: -S -60 -E -31
-  if [ "$end_offset" -eq 0 ]; then
-    tmux capture-pane -t "$session" -p -S "-$start_offset"
+  # Capture full visible pane, then extract the right page via tail+head
+  # For page 0: tail -30 (last 30 lines)
+  # For page 1: tail -60 | head -30 (lines 31-60 from bottom)
+  # For page 2: tail -90 | head -30 (lines 61-90 from bottom)
+  local total_from_end=$(( skip_from_end + page_size ))
+
+  if [ "$skip_from_end" -eq 0 ]; then
+    tmux capture-pane -t "$session" -p 2>/dev/null | tail -"$page_size"
   else
-    tmux capture-pane -t "$session" -p -S "-$start_offset" -E "-$((end_offset + 1))"
+    tmux capture-pane -t "$session" -p 2>/dev/null | tail -"$total_from_end" | head -"$page_size"
   fi
 }
 
@@ -167,7 +176,7 @@ cc_use_read_conversation() {
   # Claude Code stores transcripts in ~/.claude/projects/<mangled-path>/
   # The path is the project dir with / replaced by -
   local mangled
-  mangled=$(echo "$project_dir" | sed 's|^/||; s|/|-|g')
+  mangled=$(echo "$project_dir" | sed 's|/|-|g')
   local transcript_dir="$HOME/.claude/projects/$mangled"
 
   if [ ! -d "$transcript_dir" ]; then
@@ -198,16 +207,16 @@ cc_use_read_conversation() {
 
 cc_use_watch() {
   # Monitor inner Claude via screen snapshot diffs.
-  # Blocks until screen is stable (no changes for quiet_count consecutive checks).
+  # Blocks until inner Claude is idle (❯ prompt) with stable screen.
   # Outputs only incremental changes (≤ threshold lines) to minimize context usage.
   # Large changes (> threshold) are silently absorbed — inner Claude is clearly busy.
   #
   # Usage: cc_use_watch <session_name> <state_dir> [interval] [quiet_count] [max_iter] [diff_threshold]
-  # Defaults: interval=10s, quiet_count=2, max_iter=60 (=10min), diff_threshold=5
+  # Defaults: interval=10s, quiet_count=3, max_iter=60 (=10min), diff_threshold=5
   local session="$1"
   local state_dir="$2"
   local interval="${3:-10}"
-  local quiet_count="${4:-2}"
+  local quiet_count="${4:-3}"
   local max_iter="${5:-60}"
   local diff_threshold="${6:-5}"
 
@@ -219,8 +228,8 @@ cc_use_watch() {
   local consecutive_same=0
 
   for i in $(seq 1 "$max_iter"); do
-    # Capture current screen
-    tmux capture-pane -t "$session" -p -S -40 > "$curr_file" 2>/dev/null
+    # Capture current visible screen (full pane)
+    tmux capture-pane -t "$session" -p > "$curr_file" 2>/dev/null
 
     if [ ! -f "$screen_file" ]; then
       # First check — save baseline, no output
@@ -239,13 +248,26 @@ cc_use_watch() {
     fi
 
     if [ "$new_count" -eq 0 ]; then
-      # No change
-      consecutive_same=$((consecutive_same + 1))
-      if [ "$consecutive_same" -ge "$quiet_count" ]; then
-        echo "QUIET after $((i * interval))s"
-        # Output final status (Tier 0: last 3 lines)
-        tmux capture-pane -t "$session" -p -S -3
-        return 0
+      # No change — check if truly idle (❯ prompt visible)
+      if grep -qE '^❯' "$curr_file"; then
+        consecutive_same=$((consecutive_same + 1))
+        if [ "$consecutive_same" -ge "$quiet_count" ]; then
+          echo "IDLE after $((i * interval))s"
+          # Output Tier 0: last 5 lines for status
+          tail -5 "$curr_file"
+          cp "$curr_file" "$screen_file"
+          return 0
+        fi
+      else
+        # Screen unchanged but no ❯ — might be thinking or stuck
+        consecutive_same=$((consecutive_same + 1))
+        if [ "$consecutive_same" -ge $((quiet_count * 2)) ]; then
+          # Extended quiet without ❯ — probably stuck
+          echo "STUCK after $((i * interval))s (no ❯ prompt)"
+          tail -10 "$curr_file"
+          cp "$curr_file" "$screen_file"
+          return 2
+        fi
       fi
     elif [ "$new_count" -le "$diff_threshold" ]; then
       # Small change — output the diff for outer Claude
@@ -262,7 +284,8 @@ cc_use_watch() {
   done
 
   echo "TIMEOUT after $((max_iter * interval))s"
-  tmux capture-pane -t "$session" -p -S -3
+  tail -5 "$curr_file"
+  cp "$curr_file" "$screen_file"
   return 1
 }
 
@@ -273,7 +296,7 @@ cc_use_is_idle() {
   # Usage: cc_use_is_idle <session_name> && echo "idle" || echo "busy"
   local session="$1"
   local output
-  output=$(tmux capture-pane -t "$session" -p -S -5 2>/dev/null)
+  output=$(tmux capture-pane -t "$session" -p 2>/dev/null)
   echo "$output" | grep -qE '^❯'
 }
 
@@ -313,7 +336,7 @@ cc_use_wait_shell() {
 
   for i in $(seq 1 "$max"); do
     local output
-    output=$(tmux capture-pane -t "$session" -p -S -3 2>/dev/null)
+    output=$(tmux capture-pane -t "$session" -p 2>/dev/null | tail -5)
     if echo "$output" | grep -qE '^\$|^\(base\)|^[a-z]+@'; then
       echo "Shell prompt returned after $((i * 2))s"
       return 0
