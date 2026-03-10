@@ -58,7 +58,7 @@ Key functions:
 | `cc_use_launch <session> <project_dir> <state_dir> [perm_flags]` | Create tmux session and start claude |
 | `cc_use_stop <session>` | Gracefully exit claude and kill session |
 | `cc_use_restart <session> [perm_flags]` | Restart claude (for config changes), restores window size |
-| `cc_use_send <session> "prompt text"` | Send prompt with `[CC-USE]` prefix, handles long text |
+| `cc_use_send <session> "prompt text"` | Send prompt (flattened to single line), handles long text |
 | `cc_use_send_file <session> <file>` | Send prompt from file |
 | `cc_use_cmd <session> "/command"` | Send a slash command |
 | `cc_use_glance <session> [lines]` | Quick screen capture from bottom (default 40 lines) |

@@ -29,6 +29,14 @@ cc_use_launch() {
     tmux send-keys -t "$session" "claude" Enter
   fi
 
+  # Auto-confirm "trust this folder" dialog if it appears
+  sleep 5
+  local screen
+  screen=$(tmux capture-pane -t "$session" -p -S -10 2>/dev/null)
+  if echo "$screen" | grep -q "Yes, I trust this folder"; then
+    tmux send-keys -t "$session" Enter
+  fi
+
   echo "Launched in tmux session '$session'"
 }
 
@@ -73,8 +81,9 @@ cc_use_send() {
   local session="$1"
   local prompt="$2"
 
-  # Flatten newlines and add prefix
-  local flat="[CC-USE] $(echo "$prompt" | tr '\n' ' ')"
+  # Flatten newlines to single line
+  local flat
+  flat=$(echo "$prompt" | tr '\n' ' ')
 
   # Two-step send: text first, then Enter
   tmux send-keys -t "$session" "$flat"
@@ -88,7 +97,8 @@ cc_use_send_file() {
   local session="$1"
   local file="$2"
 
-  local flat="[CC-USE] $(cat "$file" | tr '\n' ' ')"
+  local flat
+  flat=$(cat "$file" | tr '\n' ' ')
   tmux send-keys -t "$session" "$flat"
   sleep 1
   tmux send-keys -t "$session" Enter
