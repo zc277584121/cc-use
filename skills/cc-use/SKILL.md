@@ -195,11 +195,13 @@ Verify like a real user — interact with the actual system using real data and 
 
 **4.1: Issue reproduction FIRST** (for bug fixes) — reproduce the bug end-to-end before checking the fix.
 
-**4.2: End-to-end verification** — use real environments, real data, real interactions. Avoid mocks.
+**4.2: End-to-end verification** — use real environments, real data, real interactions. Avoid mocks. Do NOT let inner Claude write code-level tests (unit tests, test scripts that import internal modules) as a substitute for real E2E testing.
 
-**4.3: Edge case coverage** — test boundary conditions end-to-end: empty/null inputs, large inputs, invalid inputs, special characters, concurrent operations.
+**4.3: For Claude Code plugin/skill/MCP development** — you MUST test by actually using the plugin/skill/MCP through Claude Code, not by writing Node.js scripts that import internal code. See @references/acceptance-testing.md for specific methods (`--plugin-dir`, `--add-dir`, `.mcp.json`, `/mcp`, `/reload-plugins`).
 
-**4.4: Run existing test suite** (supplementary) — `pytest` / `npm test` / `cargo test` as a sanity check. Passing unit tests does NOT replace e2e verification.
+**4.4: Edge case coverage** — test boundary conditions end-to-end: empty/null inputs, large inputs, invalid inputs, special characters, concurrent operations.
+
+**4.5: Run existing test suite** (supplementary) — `pytest` / `npm test` / `cargo test` as a sanity check. Passing unit tests does NOT replace e2e verification.
 
 See @references/acceptance-testing.md for detailed patterns and examples.
 

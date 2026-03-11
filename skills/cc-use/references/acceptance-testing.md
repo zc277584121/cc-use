@@ -54,11 +54,82 @@ curl -s -X POST http://localhost:3000/api/resource \
   -d '{"field": "real value"}'
 ```
 
-### MCP Servers
+### Claude Code Plugins
+
+**CRITICAL: Do NOT let inner Claude write test scripts that import internal modules. You must test by actually using the plugin through Claude Code.**
+
+Launch an inner Claude (or a separate Claude instance) with `--plugin-dir` to load the dev plugin:
+
 ```bash
-# Connect and call tools — don't just check if it compiles
-# Start the server, verify tools are listed, call them with real data
+# Launch inner Claude with the plugin loaded
+cc_use_launch "$session" "$project_dir" "$state_dir" "--dangerously-skip-permissions --plugin-dir $project_dir"
+
+# Then in inner Claude, verify:
+# 1. Skills are discoverable
+cc_use_cmd "$session" "/help"            # Check skill appears in help
+
+# 2. Slash commands work
+cc_use_send "$session" "/plugin-name:skill-name test argument"
+
+# 3. Hooks fire correctly (check /hooks output)
+cc_use_cmd "$session" "/hooks"
+
+# 4. After code changes, hot-reload without restart
+cc_use_cmd "$session" "/reload-plugins"
 ```
+
+### Claude Code Skills
+
+Load the skill directory with `--add-dir` and verify it triggers:
+
+```bash
+# Launch inner Claude with the skill directory
+cc_use_launch "$session" "$project_dir" "$state_dir" "--dangerously-skip-permissions --add-dir $project_dir"
+
+# Verify skill is discovered
+cc_use_cmd "$session" "/help"
+
+# Test manual invocation
+cc_use_send "$session" "/skill-name"
+
+# Test auto-trigger by sending a prompt that matches the skill description
+cc_use_send "$session" "a prompt that should trigger the skill"
+```
+
+### MCP Servers
+
+**Do NOT test by writing Node.js scripts that spawn the MCP process and call tools directly. Test through Claude Code's real MCP integration.**
+
+```bash
+# Step 1: Configure .mcp.json to point to the local dev build
+cat > "$project_dir/.mcp.json" <<EOF
+{
+  "mcpServers": {
+    "my-server": {
+      "type": "stdio",
+      "command": "node",
+      "args": ["./dist/index.js"],
+      "cwd": "$project_dir"
+    }
+  }
+}
+EOF
+
+# Step 2: Launch inner Claude (MCP loads automatically from .mcp.json)
+cc_use_launch "$session" "$project_dir" "$state_dir" "--dangerously-skip-permissions"
+
+# Step 3: Verify MCP server connected
+cc_use_cmd "$session" "/mcp"
+cc_use_glance "$session" 20   # Check for "✔ connected"
+
+# Step 4: Actually use the tools through Claude
+cc_use_send "$session" "Use the my-server MCP tool to do X with real data"
+
+# Step 5: After code changes, restart inner Claude to reload MCP
+cc_use_restart "$session" "--dangerously-skip-permissions"
+```
+
+**Why this matters**: Writing `node -e "import { MyClass } from './dist/...' ..."` tests the internal API, not the MCP protocol. Real bugs often hide in the MCP transport layer, tool schema definitions, or how Claude interprets tool results — none of which are covered by code-level tests.
 
 ### Web Applications (requires agent-browser)
 ```bash
