@@ -239,7 +239,14 @@ cc_use_read_tools() {
 
 # --- TUI Filtering ---
 
-_cc_use_filter='[─━]{3,}|^[[:space:]]*$|⏵⏵|^\s*$|^[·✢\*☐☑⏳⚡★✦●◆▶▸►⏵※†‡] .*…|\? for shortcuts|Worked for|Cogitated for|Sautéed for|Moonwalking|Baked for|Crunched for|Composed for|Composing|^❯'
+# Filter patterns for Claude Code TUI noise:
+# - Horizontal lines (─━)
+# - Empty/whitespace lines
+# - ⏵⏵ bypass permissions prompt
+# - Spinner lines: various unicode symbols followed by text with … (e.g. "· Moonwalking… (3s)")
+# - Timer lines: "✻ Verbed for Xm Ys" (Claude uses random verbs: Cooked, Churned, Bloviating, etc.)
+# - Status bar: "? for shortcuts", ❯ prompt
+_cc_use_filter='[─━]{3,}|^[[:space:]]*$|⏵⏵|^\s*$|^[·✢✶\*☐☑⏳⚡★✦●◆▶▸►⏵※†‡✻] .*…|\? for shortcuts|^[✻✶✢] [A-Z][a-z]+ for [0-9]|^❯'
 
 _cc_use_tier0() {
   # Output Tier 0: find last ● in screen, return from there (filtered)
