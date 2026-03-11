@@ -113,7 +113,7 @@ flowchart LR
 
 **Tier 0 — Status check (automatic)**
 
-Provided by `cc_use_watch` on exit. Shows the last 5 lines — typically the `❯` prompt and a summary. Answers: "Did it finish? Did it succeed?"
+Provided by `cc_use_watch` on exit. Finds the last `●` marker in the screen (which starts Claude's response) and returns from there, with TUI noise filtered out (spinners, timers, decoration lines). Answers: "Did it finish? What did it conclude?"
 
 **Tier 1 — Quick summary**
 
@@ -141,7 +141,10 @@ Each page adds only new information — no repeated content across pages.
 
 **Tier 3 — Full conversation transcript**
 
-`cc_use_read_conversation "$project_dir"` — parses inner Claude's JSONL transcript from `~/.claude/projects/`. Use when you need complete reasoning, not just screen output.
+Two functions for JSONL transcript parsing from `~/.claude/projects/`:
+
+- `cc_use_read_conversation "$project_dir" [N]` — extracts last N complete assistant messages (all text blocks joined per message, separated by `--- MESSAGE ---`)
+- `cc_use_read_tools "$project_dir" [N]` — lightweight overview: shows tool calls + text summary (first 80 chars) for last N messages. Use to quickly understand what inner Claude did without reading full responses.
 
 ### Context efficiency
 

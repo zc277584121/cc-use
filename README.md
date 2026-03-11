@@ -99,7 +99,7 @@ The outer Claude keeps track of which files need changing and runs end-to-end te
 
    | Tier | Method | Context cost |
    |------|--------|-------------|
-   | 0 | Auto from `cc_use_watch` (last 3 lines) | ~5 tokens |
+   | 0 | Auto from `cc_use_watch` (last ● block, filtered) | ~10 tokens |
    | 1 | `cc_use_glance` (last 10 lines) | ~15 tokens |
    | 2 | `cc_use_scroll` (page up 30 lines at a time, no overlap) | ~45 tokens/page |
    | 3 | `cc_use_read_conversation` (parse JSONL transcript) | varies |

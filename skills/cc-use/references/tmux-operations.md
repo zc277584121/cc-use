@@ -19,7 +19,7 @@ tmux send-keys -t "cc-use-inner" "claude --dangerously-skip-permissions" Enter
 **CRITICAL: Always verify inner Claude is idle before sending input.**
 ```bash
 # Check for idle state (❯ prompt visible)
-output=$(tmux capture-pane -t "cc-use-inner" -p -S -3)
+output=$(tmux capture-pane -t "cc-use-inner" -p)
 echo "$output" | grep -qE '^❯' && echo "ready" || echo "busy"
 ```
 
@@ -95,20 +95,23 @@ tmux kill-session -t "cc-use-inner"
 
 ## Reading Output
 
-### Quick glance (one screen, ~40 lines)
+### Quick glance (last N lines)
 ```bash
-tmux capture-pane -t "cc-use-inner" -p -S -40
+# Last 40 lines of visible screen
+tmux capture-pane -t "cc-use-inner" -p | tail -40
 ```
 Use this for quick status checks. Equivalent to a human glancing at the terminal.
 
 ### Capture more context
 ```bash
-# Last 200 lines
-tmux capture-pane -t "cc-use-inner" -p -S -200
+# Last 200 lines (from scrollback + visible)
+tmux capture-pane -t "cc-use-inner" -p -S - | tail -200
 
 # Full scrollback buffer
 tmux capture-pane -t "cc-use-inner" -p -S -
 ```
+
+**NOTE**: `-S -N` means "start N lines into scrollback", NOT "last N lines". Always use `| tail -N` to get the last N lines.
 
 ### Screen-diff monitoring (recommended)
 
@@ -121,10 +124,9 @@ Instead of polling for idle state, use `cc_use_watch` which compares screen snap
 This avoids repeating previously-seen output and minimizes outer context usage.
 
 ### Important notes on output capture
-- `tmux capture-pane` captures what's **currently rendered** on screen
+- `tmux capture-pane -p` captures only the **visible area** (~50 lines). Add `-S -` to include scrollback
 - It does NOT capture content hidden behind interactive UI (e.g., Ctrl+O expanded details)
-- For full conversation history, read Claude's session jsonl files in `~/.claude/projects/`
-- `pipe-pane` logs contain raw terminal output including ANSI escape codes
+- For full conversation history, use `cc_use_read_conversation` to parse JSONL transcripts in `~/.claude/projects/`
 
 ## Checking Session Status
 
@@ -160,7 +162,7 @@ Read the last few lines of output and look for patterns:
 # Silent poll — only output on completion. Adjust max iterations for expected task duration.
 # 120 iterations × 5s = 10 minutes max
 for i in $(seq 1 120); do
-  output=$(tmux capture-pane -t "cc-use-inner" -p -S -5 2>/dev/null)
+  output=$(tmux capture-pane -t "cc-use-inner" -p 2>/dev/null)
   if echo "$output" | grep -qE '^❯'; then
     echo "IDLE after $((i*5))s"
     break
@@ -168,7 +170,7 @@ for i in $(seq 1 120); do
   sleep 5
 done
 # Capture output only AFTER confirming idle
-tmux capture-pane -t "cc-use-inner" -p -S -40
+tmux capture-pane -t "cc-use-inner" -p | tail -40
 ```
 
 **Do NOT** echo or print inside the loop body — that output goes into your context.
@@ -178,7 +180,7 @@ tmux capture-pane -t "cc-use-inner" -p -S -40
 ```bash
 # Wait for shell prompt to return after /exit
 for i in $(seq 1 15); do
-  output=$(tmux capture-pane -t "cc-use-inner" -p -S -3)
+  output=$(tmux capture-pane -t "cc-use-inner" -p 2>/dev/null | tail -5)
   if echo "$output" | grep -qE '^\$|^[a-z]+@|^\(base\)'; then
     echo "Claude has exited, shell prompt returned"
     break
