@@ -373,18 +373,37 @@ cc_use_is_alive() {
 # --- Waiting ---
 
 cc_use_wait_idle() {
-  # Wait for inner Claude to become idle (silent, minimal context usage)
+  # Wait for inner Claude to become idle (screen stable + ❯ visible)
+  # Requires consecutive stable checks to avoid false detection after prompt send.
+  #
   # Usage: cc_use_wait_idle <session_name> [max_iterations] [interval_seconds]
   # Default: 120 iterations × 5s = 10 minutes
   local session="$1"
   local max="${2:-120}"
   local interval="${3:-5}"
+  local consecutive=0
+  local prev_screen=""
 
   for i in $(seq 1 "$max"); do
-    if cc_use_is_idle "$session"; then
-      echo "IDLE after $((i * interval))s"
-      return 0
+    local curr_screen
+    curr_screen=$(tmux capture-pane -t "$session" -p 2>/dev/null)
+
+    if echo "$curr_screen" | grep -qE '^❯'; then
+      # ❯ visible — check if screen is stable (same as previous capture)
+      if [ "$curr_screen" = "$prev_screen" ]; then
+        consecutive=$((consecutive + 1))
+        if [ "$consecutive" -ge 2 ]; then
+          echo "IDLE after $((i * interval))s"
+          return 0
+        fi
+      else
+        consecutive=0
+      fi
+    else
+      consecutive=0
     fi
+
+    prev_screen="$curr_screen"
     sleep "$interval"
   done
   echo "TIMEOUT after $((max * interval))s"
