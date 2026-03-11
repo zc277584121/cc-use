@@ -113,28 +113,28 @@ flowchart LR
 
 **Tier 0 — Status check (automatic)**
 
-Provided by `$CC watch` on exit. Finds the last `●` marker in the screen (which starts Claude's response) and returns from there, with TUI noise filtered out (spinners, timers, decoration lines). Answers: "Did it finish? What did it conclude?"
+Provided by `.cc-use/cc watch` on exit. Finds the last `●` marker in the screen (which starts Claude's response) and returns from there, with TUI noise filtered out (spinners, timers, decoration lines). Answers: "Did it finish? What did it conclude?"
 
 **Tier 1 — Quick summary**
 
-`$CC glance "$session" 10` — 10 lines. Usually captures inner Claude's completion summary. Answers: "What did it accomplish?"
+`.cc-use/cc glance "$session" 10` — 10 lines. Usually captures inner Claude's completion summary. Answers: "What did it accomplish?"
 
 **Tier 2 — Scroll up page by page**
 
-`$CC scroll "$session" <page>` — 30 lines per page with **zero overlap**:
+`.cc-use/cc scroll "$session" <page>` — 30 lines per page with **zero overlap**:
 
 ```
-┌─────────────────────────┐
-│  $CC scroll  page 2     │ ← older output
-│   (lines 61-90)         │
-├─────────────────────────┤
-│  $CC scroll  page 1     │ ← middle
-│   (lines 31-60)         │
-├─────────────────────────┤
-│  $CC scroll  page 0     │ ← most recent
-│   (lines 1-30)          │
-└─────────────────────────┘
-         Bottom of screen
+┌──────────────────────────────────┐
+│  .cc-use/cc scroll  page 2      │ ← older output
+│   (lines 61-90)                  │
+├──────────────────────────────────┤
+│  .cc-use/cc scroll  page 1      │ ← middle
+│   (lines 31-60)                  │
+├──────────────────────────────────┤
+│  .cc-use/cc scroll  page 0      │ ← most recent
+│   (lines 1-30)                   │
+└──────────────────────────────────┘
+            Bottom of screen
 ```
 
 Each page adds only new information — no repeated content across pages.
@@ -143,8 +143,8 @@ Each page adds only new information — no repeated content across pages.
 
 Two commands for JSONL transcript parsing from `~/.claude/projects/`:
 
-- `$CC read_conversation "$project_dir" [N]` — extracts last N complete assistant messages (all text blocks joined per message, separated by `--- MESSAGE ---`)
-- `$CC read_tools "$project_dir" [N]` — lightweight overview: shows tool calls + text summary (first 80 chars) for last N messages. Use to quickly understand what inner Claude did without reading full responses.
+- `.cc-use/cc read_conversation "$project_dir" [N]` — extracts last N complete assistant messages (all text blocks joined per message, separated by `--- MESSAGE ---`)
+- `.cc-use/cc read_tools "$project_dir" [N]` — lightweight overview: shows tool calls + text summary (first 80 chars) for last N messages. Use to quickly understand what inner Claude did without reading full responses.
 
 ### Context efficiency
 
@@ -219,22 +219,22 @@ All cc-use reading functions (`glance`, `scroll`, `is_idle`, `wait_shell`) use t
 
 ```mermaid
 stateDiagram-v2
-    [*] --> Launching: $CC launch
+    [*] --> Launching: .cc-use/cc launch
     Launching --> TrustDialog: Claude starts
     TrustDialog --> Ready: Auto-confirm Enter
-    Ready --> Working: $CC send (task)
+    Ready --> Working: .cc-use/cc send (task)
 
     Working --> Working: Screen changing (busy)
     Working --> Idle: Screen stable + ❯
     Working --> Stuck: Screen stable, no ❯
     Working --> Timeout: Max iterations
 
-    Idle --> Working: $CC send (next task)
-    Idle --> Compacting: $CC cmd "/compact"
-    Idle --> Stopped: $CC stop
+    Idle --> Working: .cc-use/cc send (next task)
+    Idle --> Compacting: .cc-use/cc cmd "/compact"
+    Idle --> Stopped: .cc-use/cc stop
 
-    Stuck --> Working: $CC send (intervention)
-    Stuck --> Stopped: $CC stop
+    Stuck --> Working: .cc-use/cc send (intervention)
+    Stuck --> Stopped: .cc-use/cc stop
 
     Compacting --> Ready: Context compressed
     Stopped --> [*]
