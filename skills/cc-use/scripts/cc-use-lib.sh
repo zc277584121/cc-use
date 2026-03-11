@@ -266,23 +266,38 @@ _cc_use_tier0() {
 
 cc_use_watch() {
   # Monitor inner Claude via screen snapshot diffs.
-  # Blocks until inner Claude is idle (❯ prompt) with stable screen.
-  # Outputs only incremental changes (≤ threshold lines) to minimize context usage.
-  # Large changes (> threshold) are silently absorbed — inner Claude is clearly busy.
+  # Blocks until inner Claude is idle (❯ prompt + not thinking + stable screen).
   #
-  # Usage: cc_use_watch <session_name> <state_dir> [interval] [quiet_count] [max_iter] [diff_threshold]
+  # Two modes:
+  #   cc_use_watch <session> <state_dir> [...]  — full monitoring: outputs incremental
+  #       diffs, Tier 0 on exit. Use after sending a task.
+  #   cc_use_watch <session>                     — quiet mode: only outputs "IDLE after Xs".
+  #       Use for waiting on startup, menu close, etc.
+  #
+  # Usage: cc_use_watch <session_name> [state_dir] [interval] [quiet_count] [max_iter] [diff_threshold]
   # Defaults: interval=10s, quiet_count=3, max_iter=60 (=10min), diff_threshold=5
   local session="$1"
-  local state_dir="$2"
+  local state_dir="${2:-}"
   local interval="${3:-10}"
   local quiet_count="${4:-3}"
   local max_iter="${5:-60}"
   local diff_threshold="${6:-5}"
 
-  local screen_file="$state_dir/last-screen.txt"
+  # Quiet mode: no state_dir → use temp file, suppress diff/Tier 0 output
+  local quiet=false
+  local screen_file
+  if [ -z "$state_dir" ]; then
+    quiet=true
+    screen_file=$(mktemp)
+    interval="${interval:-5}"
+    quiet_count=2
+  else
+    screen_file="$state_dir/last-screen.txt"
+  fi
+
   local curr_file
   curr_file=$(mktemp)
-  trap "rm -f '$curr_file'" RETURN
+  trap "rm -f '$curr_file'; $quiet && rm -f '$screen_file'" RETURN
 
   local consecutive_same=0
 
@@ -307,13 +322,14 @@ cc_use_watch() {
     fi
 
     if [ "$new_count" -eq 0 ]; then
-      # No change — check if truly idle (❯ prompt visible)
-      if grep -qE '^❯' "$curr_file"; then
+      # No change — check if truly idle (❯ visible AND not thinking/working)
+      if grep -qE '^❯' "$curr_file" && ! grep -qE 'thinking\)|thought for|^[·✢✶\*☐☑⏳⚡★✦●◆▶▸►⏵※†‡✻] [A-Z].*…' "$curr_file"; then
         consecutive_same=$((consecutive_same + 1))
         if [ "$consecutive_same" -ge "$quiet_count" ]; then
           echo "IDLE after $((i * interval))s"
-          # Output Tier 0: find last ● block, filtered
-          _cc_use_tier0 "$curr_file"
+          if ! $quiet; then
+            _cc_use_tier0 "$curr_file"
+          fi
           cp "$curr_file" "$screen_file"
           return 0
         fi
@@ -323,7 +339,9 @@ cc_use_watch() {
         if [ "$consecutive_same" -ge $((quiet_count * 2)) ]; then
           # Extended quiet without ❯ — probably stuck
           echo "STUCK after $((i * interval))s (no ❯ prompt)"
-          _cc_use_tier0 "$curr_file"
+          if ! $quiet; then
+            _cc_use_tier0 "$curr_file"
+          fi
           cp "$curr_file" "$screen_file"
           return 2
         fi
@@ -331,10 +349,12 @@ cc_use_watch() {
     elif [ "$new_count" -le "$diff_threshold" ]; then
       # Small change — filter TUI noise, output meaningful diff only
       consecutive_same=0
-      local filtered
-      filtered=$(printf '%s\n' "$new_lines" | grep -vE "$_cc_use_filter")
-      if [ -n "$filtered" ]; then
-        echo "$filtered"
+      if ! $quiet; then
+        local filtered
+        filtered=$(printf '%s\n' "$new_lines" | grep -vE "$_cc_use_filter")
+        if [ -n "$filtered" ]; then
+          echo "$filtered"
+        fi
       fi
       cp "$curr_file" "$screen_file"
     else
@@ -347,7 +367,9 @@ cc_use_watch() {
   done
 
   echo "TIMEOUT after $((max_iter * interval))s"
-  _cc_use_tier0 "$curr_file"
+  if ! $quiet; then
+    _cc_use_tier0 "$curr_file"
+  fi
   cp "$curr_file" "$screen_file"
   return 1
 }
@@ -355,12 +377,24 @@ cc_use_watch() {
 # --- State Detection ---
 
 cc_use_is_idle() {
-  # Check if inner Claude is idle (showing ❯ prompt)
+  # Check if inner Claude is idle (❯ visible AND not thinking/working)
   # Usage: cc_use_is_idle <session_name> && echo "idle" || echo "busy"
   local session="$1"
   local output
   output=$(tmux capture-pane -t "$session" -p 2>/dev/null)
-  echo "$output" | grep -qE '^❯'
+
+  # Must have ❯ prompt
+  echo "$output" | grep -qE '^❯' || return 1
+
+  # Must NOT have thinking/working indicators
+  # These appear when Claude is busy but ❯ is still visible on screen:
+  # - "(thinking)" / "(thought for Xs)" in spinner lines
+  # - Spinner lines: unicode symbol + Capitalized word + … (e.g. "✶ Composing… (3s)")
+  if echo "$output" | grep -qE 'thinking\)|thought for|^[·✢✶\*☐☑⏳⚡★✦●◆▶▸►⏵※†‡✻] [A-Z].*…'; then
+    return 1
+  fi
+
+  return 0
 }
 
 cc_use_is_alive() {
@@ -373,41 +407,12 @@ cc_use_is_alive() {
 # --- Waiting ---
 
 cc_use_wait_idle() {
-  # Wait for inner Claude to become idle (screen stable + ❯ visible)
-  # Requires consecutive stable checks to avoid false detection after prompt send.
-  #
-  # Usage: cc_use_wait_idle <session_name> [max_iterations] [interval_seconds]
-  # Default: 120 iterations × 5s = 10 minutes
+  # DEPRECATED: Use cc_use_watch "$session" (quiet mode) instead.
+  # Kept for backward compatibility.
   local session="$1"
   local max="${2:-120}"
   local interval="${3:-5}"
-  local consecutive=0
-  local prev_screen=""
-
-  for i in $(seq 1 "$max"); do
-    local curr_screen
-    curr_screen=$(tmux capture-pane -t "$session" -p 2>/dev/null)
-
-    if echo "$curr_screen" | grep -qE '^❯'; then
-      # ❯ visible — check if screen is stable (same as previous capture)
-      if [ "$curr_screen" = "$prev_screen" ]; then
-        consecutive=$((consecutive + 1))
-        if [ "$consecutive" -ge 2 ]; then
-          echo "IDLE after $((i * interval))s"
-          return 0
-        fi
-      else
-        consecutive=0
-      fi
-    else
-      consecutive=0
-    fi
-
-    prev_screen="$curr_screen"
-    sleep "$interval"
-  done
-  echo "TIMEOUT after $((max * interval))s"
-  return 1
+  cc_use_watch "$session" "" "$interval" 2 "$max"
 }
 
 cc_use_wait_shell() {

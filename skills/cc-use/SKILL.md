@@ -63,9 +63,9 @@ Key functions:
 | `cc_use_scroll <session> <page> [page_size]` | Page through scrollback: page 0=bottom, 1=one page up, etc. (default 30 lines/page) |
 | `cc_use_read_conversation <project_dir> [last_n]` | Read last N complete assistant messages from JSONL transcript (Tier 3) |
 | `cc_use_read_tools <project_dir> [last_n]` | Show tool calls + text summary for last N messages (quick activity overview) |
-| `cc_use_watch <session> <state_dir> [interval] [quiet] [max] [threshold]` | Screen-diff monitor: blocks until quiet, outputs only incremental changes |
-| `cc_use_is_idle <session>` | Check if inner Claude is at ❯ prompt (exit code 0 = idle) |
-| `cc_use_wait_idle <session> [max_iter] [interval]` | Silent poll until idle (default 10min) |
+| `cc_use_watch <session> <state_dir> [...]` | Full monitoring: outputs incremental diffs + Tier 0. Use after sending a task |
+| `cc_use_watch <session>` | Quiet mode: just waits for idle, outputs only "IDLE after Xs". Use for startup/menu wait |
+| `cc_use_is_idle <session>` | Check if inner Claude is at ❯ prompt and not thinking (exit code 0 = idle) |
 | `cc_use_wait_shell <session> [max_iter]` | Wait for claude to exit to shell |
 | `cc_use_fix_size <session>` | Restore window to 220x50 (after user attach/detach) |
 
@@ -112,7 +112,7 @@ cc_use_launch "$session_name" "$project_dir" "$(pwd)/state" "--dangerously-skip-
 
 Wait for Claude to be ready, then send the task prompt:
 ```bash
-cc_use_wait_idle "$session_name" 30 && cc_use_send "$session_name" "Your task description here"
+cc_use_watch "$session_name" && cc_use_send "$session_name" "Your task description here"
 ```
 
 For long prompts, write to a file first:
