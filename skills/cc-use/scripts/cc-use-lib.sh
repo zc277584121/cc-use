@@ -124,17 +124,17 @@ cc_use_cmd() {
 # --- Reading Output ---
 
 cc_use_glance() {
-  # Quick glance at inner Claude's current screen (last N lines)
+  # Quick glance at inner Claude's current screen (last N lines, TUI noise filtered)
   # Usage: cc_use_glance <session_name> [lines]
   local session="$1"
   local lines="${2:-40}"
 
-  tmux capture-pane -t "$session" -p 2>/dev/null | tail -"$lines"
+  tmux capture-pane -t "$session" -p 2>/dev/null | grep -vE "$_cc_use_filter" | tail -"$lines"
 }
 
 cc_use_scroll() {
   # Page through tmux output like scrolling up in a terminal.
-  # Each call returns a non-overlapping page of output.
+  # Each call returns a non-overlapping page of output from scrollback + visible area.
   #
   # Usage: cc_use_scroll <session_name> <page> [page_size]
   # page=0: bottom (most recent), page=1: one page up, page=2: two pages up, ...
@@ -150,16 +150,15 @@ cc_use_scroll() {
 
   local skip_from_end=$(( page * page_size ))
 
-  # Capture full visible pane, then extract the right page via tail+head
-  # For page 0: tail -30 (last 30 lines)
-  # For page 1: tail -60 | head -30 (lines 31-60 from bottom)
-  # For page 2: tail -90 | head -30 (lines 61-90 from bottom)
+  # -S - : capture from start of scrollback history
+  # -E - : capture to end of visible area
+  # This gives us the FULL output (scrollback + visible), then we paginate with tail+head
   local total_from_end=$(( skip_from_end + page_size ))
 
   if [ "$skip_from_end" -eq 0 ]; then
-    tmux capture-pane -t "$session" -p 2>/dev/null | tail -"$page_size"
+    tmux capture-pane -t "$session" -p -S - 2>/dev/null | tail -"$page_size"
   else
-    tmux capture-pane -t "$session" -p 2>/dev/null | tail -"$total_from_end" | head -"$page_size"
+    tmux capture-pane -t "$session" -p -S - 2>/dev/null | tail -"$total_from_end" | head -"$page_size"
   fi
 }
 
@@ -176,7 +175,7 @@ cc_use_read_conversation() {
   # Claude Code stores transcripts in ~/.claude/projects/<mangled-path>/
   # The path is the project dir with / replaced by -
   local mangled
-  mangled=$(echo "$project_dir" | sed 's|/|-|g')
+  mangled=$(echo "$project_dir" | sed 's|[/_]|-|g')
   local transcript_dir="$HOME/.claude/projects/$mangled"
 
   if [ ! -d "$transcript_dir" ]; then
@@ -201,6 +200,24 @@ cc_use_read_conversation() {
     | select(.type == "text")
     | .text
   ' "$latest" 2>/dev/null | tail -n "$last_n"
+}
+
+# --- TUI Filtering ---
+
+_cc_use_filter='[─━]{3,}|^[[:space:]]*$|⏵⏵|^\s*$|^[·✢\*☐☑⏳⚡★✦●◆▶▸►⏵※†‡] .*…|\? for shortcuts|Worked for|Cogitated for|Sautéed for|Moonwalking|Baked for|Crunched for|Composed for|Composing|^❯'
+
+_cc_use_tier0() {
+  # Output Tier 0: find last ● in screen, return from there (filtered)
+  # Usage: _cc_use_tier0 <screen_file>
+  local file="$1"
+  local last_line
+  last_line=$(grep -n '^●' "$file" | tail -1 | cut -d: -f1)
+  if [ -n "$last_line" ]; then
+    tail -n +"$last_line" "$file" | grep -vE "$_cc_use_filter" | head -12
+  else
+    # No ● found, fall back to last 15 lines
+    tail -15 "$file" | grep -vE "$_cc_use_filter" | head -8
+  fi
 }
 
 # --- Screen-Diff Based Monitoring ---
@@ -253,8 +270,8 @@ cc_use_watch() {
         consecutive_same=$((consecutive_same + 1))
         if [ "$consecutive_same" -ge "$quiet_count" ]; then
           echo "IDLE after $((i * interval))s"
-          # Output Tier 0: last 15 lines, filtered to remove UI decoration
-          tail -15 "$curr_file" | grep -vE '^[─━]{3,}|^[[:space:]]*$|⏵⏵|^\s*$|^[·✢\*☐☑⏳⚡★✦●◆▶▸►⏵※†‡] .*…|^\? for shortcuts|Worked for|Cogitated for|Sautéed for|Moonwalking' | head -8
+          # Output Tier 0: find last ● block, filtered
+          _cc_use_tier0 "$curr_file"
           cp "$curr_file" "$screen_file"
           return 0
         fi
@@ -264,7 +281,7 @@ cc_use_watch() {
         if [ "$consecutive_same" -ge $((quiet_count * 2)) ]; then
           # Extended quiet without ❯ — probably stuck
           echo "STUCK after $((i * interval))s (no ❯ prompt)"
-          tail -15 "$curr_file" | grep -vE '^[─━─]{5,}|^[[:space:]]*$|⏵⏵' | head -8
+          _cc_use_tier0 "$curr_file"
           cp "$curr_file" "$screen_file"
           return 2
         fi
@@ -273,7 +290,7 @@ cc_use_watch() {
       # Small change — filter TUI noise, output meaningful diff only
       consecutive_same=0
       local filtered
-      filtered=$(printf '%s\n' "$new_lines" | grep -vE '^[─━]{3,}|^[[:space:]]*$|⏵⏵|^\s*$|^[·✢\*☐☑⏳⚡★✦●◆▶▸►⏵※†‡] .*…|^\? for shortcuts|Worked for|Cogitated for|Sautéed for|Moonwalking')
+      filtered=$(printf '%s\n' "$new_lines" | grep -vE "$_cc_use_filter")
       if [ -n "$filtered" ]; then
         echo "$filtered"
       fi
@@ -288,7 +305,7 @@ cc_use_watch() {
   done
 
   echo "TIMEOUT after $((max_iter * interval))s"
-  tail -15 "$curr_file" | grep -vE '^[─━─]{5,}|^[[:space:]]*$|⏵⏵' | head -8
+  _cc_use_tier0 "$curr_file"
   cp "$curr_file" "$screen_file"
   return 1
 }
