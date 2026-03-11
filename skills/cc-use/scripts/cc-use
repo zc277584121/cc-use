@@ -3,7 +3,7 @@
 # Usage: cc-use <command> [args...]
 # Example: cc-use watch "$session" "$state_dir"
 
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
 source "$SCRIPT_DIR/cc-use-lib.sh"
 
 cmd="${1:?Usage: cc-use <command> [args...]}"
