@@ -61,7 +61,8 @@ Key functions:
 | `cc_use_cmd <session> "/command"` | Send a slash command |
 | `cc_use_glance <session> [lines]` | Quick screen capture from bottom (default 40 lines) |
 | `cc_use_scroll <session> <page> [page_size]` | Page through scrollback: page 0=bottom, 1=one page up, etc. (default 30 lines/page) |
-| `cc_use_read_conversation <project_dir> [last_n]` | Read last N assistant messages from JSONL transcript (Tier 3) |
+| `cc_use_read_conversation <project_dir> [last_n]` | Read last N complete assistant messages from JSONL transcript (Tier 3) |
+| `cc_use_read_tools <project_dir> [last_n]` | Show tool calls + text summary for last N messages (quick activity overview) |
 | `cc_use_watch <session> <state_dir> [interval] [quiet] [max] [threshold]` | Screen-diff monitor: blocks until quiet, outputs only incremental changes |
 | `cc_use_is_idle <session>` | Check if inner Claude is at ❯ prompt (exit code 0 = idle) |
 | `cc_use_wait_idle <session> [max_iter] [interval]` | Silent poll until idle (default 10min) |
@@ -157,7 +158,7 @@ Note: Some incremental diffs may be Claude Code UI refreshes (progress timers, s
 | **0** | Auto from `cc_use_watch` (filtered, up to 8 lines) | Always — shows inner Claude's last response summary | ~10 tokens |
 | **1** | `cc_use_glance "$session" 10` | Need a quick summary of what happened | ~15 tokens |
 | **2** | `cc_use_scroll "$session" 0` then `1`, `2`... | Scroll up page by page (30 lines each, no overlap) | ~45 tokens/page |
-| **3** | `cc_use_read_conversation "$project_dir"` | Need full assistant response (JSONL parsing) | varies |
+| **3** | `cc_use_read_conversation "$project_dir"` or `cc_use_read_tools "$project_dir"` | Need full assistant response or activity overview (JSONL parsing) | varies |
 
 **Tier 2 example — scrolling up like a human:**
 ```bash

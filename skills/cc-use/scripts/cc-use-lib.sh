@@ -193,13 +193,48 @@ cc_use_read_conversation() {
   fi
 
   echo "=== Transcript: $(basename "$latest") ==="
-  # Extract assistant text messages, get last N
-  jq -r '
-    select(.type == "assistant")
-    | .message.content[]
-    | select(.type == "text")
-    | .text
-  ' "$latest" 2>/dev/null | tail -n "$last_n"
+  # Extract last N complete assistant messages (all text blocks joined per message)
+  # Uses jq slurp to treat each JSONL line as a message, then pick last N
+  jq -rs '
+    [.[] | select(.type == "assistant")
+     | .message.content
+     | map(select(.type == "text") | .text)
+     | if length > 0 then join("\n") else empty end
+    ] | .[-'"$last_n"':][] | "--- MESSAGE ---\n" + .
+  ' "$latest" 2>/dev/null
+}
+
+cc_use_read_tools() {
+  # Read what tools the inner Claude called in its last N messages.
+  # Useful for understanding what inner Claude did without reading full output.
+  #
+  # Usage: cc_use_read_tools <project_dir> [last_n_messages]
+  # Default: last 5 messages
+  local project_dir="$1"
+  local last_n="${2:-5}"
+
+  local mangled
+  mangled=$(echo "$project_dir" | sed 's|[/_]|-|g')
+  local transcript_dir="$HOME/.claude/projects/$mangled"
+
+  local latest
+  latest=$(ls -t "$transcript_dir"/*.jsonl 2>/dev/null | head -1)
+
+  if [ -z "$latest" ]; then
+    echo "No transcript files found"
+    return 1
+  fi
+
+  # Extract tool calls with their names and a snippet of input
+  jq -rs '
+    [.[] | select(.type == "assistant")
+     | { tools: [.message.content[] | select(.type == "tool_use") | .name],
+         text: ([.message.content[] | select(.type == "text") | .text] | join(" ") | .[:80]) }
+     | if (.tools | length) > 0 or (.text | length) > 0 then . else empty end
+    ] | .[-'"$last_n"':][]
+    | (if (.tools | length) > 0 then "Tools: " + (.tools | join(", ")) else "" end)
+      + (if (.text | length) > 0 then "\nText: " + .text else "" end)
+  ' "$latest" 2>/dev/null
 }
 
 # --- TUI Filtering ---
