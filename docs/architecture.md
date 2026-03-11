@@ -113,25 +113,25 @@ flowchart LR
 
 **Tier 0 — Status check (automatic)**
 
-Provided by `cc_use_watch` on exit. Finds the last `●` marker in the screen (which starts Claude's response) and returns from there, with TUI noise filtered out (spinners, timers, decoration lines). Answers: "Did it finish? What did it conclude?"
+Provided by `$CC watch` on exit. Finds the last `●` marker in the screen (which starts Claude's response) and returns from there, with TUI noise filtered out (spinners, timers, decoration lines). Answers: "Did it finish? What did it conclude?"
 
 **Tier 1 — Quick summary**
 
-`cc_use_glance "$session" 10` — 10 lines. Usually captures inner Claude's completion summary. Answers: "What did it accomplish?"
+`$CC glance "$session" 10` — 10 lines. Usually captures inner Claude's completion summary. Answers: "What did it accomplish?"
 
 **Tier 2 — Scroll up page by page**
 
-`cc_use_scroll "$session" <page>` — 30 lines per page with **zero overlap**:
+`$CC scroll "$session" <page>` — 30 lines per page with **zero overlap**:
 
 ```
 ┌─────────────────────────┐
-│  cc_use_scroll  page 2  │ ← older output
+│  $CC scroll  page 2     │ ← older output
 │   (lines 61-90)         │
 ├─────────────────────────┤
-│  cc_use_scroll  page 1  │ ← middle
+│  $CC scroll  page 1     │ ← middle
 │   (lines 31-60)         │
 ├─────────────────────────┤
-│  cc_use_scroll  page 0  │ ← most recent
+│  $CC scroll  page 0     │ ← most recent
 │   (lines 1-30)          │
 └─────────────────────────┘
          Bottom of screen
@@ -141,10 +141,10 @@ Each page adds only new information — no repeated content across pages.
 
 **Tier 3 — Full conversation transcript**
 
-Two functions for JSONL transcript parsing from `~/.claude/projects/`:
+Two commands for JSONL transcript parsing from `~/.claude/projects/`:
 
-- `cc_use_read_conversation "$project_dir" [N]` — extracts last N complete assistant messages (all text blocks joined per message, separated by `--- MESSAGE ---`)
-- `cc_use_read_tools "$project_dir" [N]` — lightweight overview: shows tool calls + text summary (first 80 chars) for last N messages. Use to quickly understand what inner Claude did without reading full responses.
+- `$CC read_conversation "$project_dir" [N]` — extracts last N complete assistant messages (all text blocks joined per message, separated by `--- MESSAGE ---`)
+- `$CC read_tools "$project_dir" [N]` — lightweight overview: shows tool calls + text summary (first 80 chars) for last N messages. Use to quickly understand what inner Claude did without reading full responses.
 
 ### Context efficiency
 
@@ -219,22 +219,22 @@ All cc-use reading functions (`glance`, `scroll`, `is_idle`, `wait_shell`) use t
 
 ```mermaid
 stateDiagram-v2
-    [*] --> Launching: cc_use_launch
+    [*] --> Launching: $CC launch
     Launching --> TrustDialog: Claude starts
     TrustDialog --> Ready: Auto-confirm Enter
-    Ready --> Working: cc_use_send (task)
+    Ready --> Working: $CC send (task)
 
     Working --> Working: Screen changing (busy)
     Working --> Idle: Screen stable + ❯
     Working --> Stuck: Screen stable, no ❯
     Working --> Timeout: Max iterations
 
-    Idle --> Working: cc_use_send (next task)
-    Idle --> Compacting: cc_use_cmd "/compact"
-    Idle --> Stopped: cc_use_stop
+    Idle --> Working: $CC send (next task)
+    Idle --> Compacting: $CC cmd "/compact"
+    Idle --> Stopped: $CC stop
 
-    Stuck --> Working: cc_use_send (intervention)
-    Stuck --> Stopped: cc_use_stop
+    Stuck --> Working: $CC send (intervention)
+    Stuck --> Stopped: $CC stop
 
     Compacting --> Ready: Context compressed
     Stopped --> [*]

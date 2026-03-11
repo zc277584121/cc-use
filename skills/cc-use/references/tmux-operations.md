@@ -115,7 +115,7 @@ tmux capture-pane -t "cc-use-inner" -p -S -
 
 ### Screen-diff monitoring (recommended)
 
-Instead of polling for idle state, use `cc_use_watch` which compares screen snapshots:
+Instead of polling for idle state, use `$CC watch` which compares screen snapshots:
 - Captures screen every N seconds, diffs against previous snapshot
 - Small diffs (≤5 lines): outputs incrementally — outer Claude sees only new content
 - Large diffs (>5 lines): inner Claude is busy, stays silent
@@ -126,7 +126,7 @@ This avoids repeating previously-seen output and minimizes outer context usage.
 ### Important notes on output capture
 - `tmux capture-pane -p` captures only the **visible area** (~50 lines). Add `-S -` to include scrollback
 - It does NOT capture content hidden behind interactive UI (e.g., Ctrl+O expanded details)
-- For full conversation history, use `cc_use_read_conversation` to parse JSONL transcripts in `~/.claude/projects/`
+- For full conversation history, use `$CC read_conversation` to parse JSONL transcripts in `~/.claude/projects/`
 
 ## Checking Session Status
 

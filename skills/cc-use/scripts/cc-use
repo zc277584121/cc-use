@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+# Dispatcher for cc-use functions
+# Usage: cc-use <command> [args...]
+# Example: cc-use watch "$session" "$state_dir"
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+source "$SCRIPT_DIR/cc-use-lib.sh"
+
+cmd="${1:?Usage: cc-use <command> [args...]}"
+shift
+
+func="cc_use_${cmd}"
+if ! declare -f "$func" > /dev/null 2>&1; then
+  echo "Unknown command: $cmd" >&2
+  echo "Available commands:" >&2
+  declare -F | grep -oP 'cc_use_\K\w+' | sed 's/^/  /' >&2
+  exit 1
+fi
+
+"$func" "$@"

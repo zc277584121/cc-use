@@ -91,7 +91,7 @@ The outer Claude keeps track of which files need changing and runs end-to-end te
 
 4. **Monitoring uses screen-diff** — a single Bash call that compares tmux snapshots every 10s. Only incremental changes (≤5 new lines) are output; large changes mean inner Claude is busy and are silently absorbed:
    ```bash
-   cc_use_watch "$session" "$state_dir"
+   $CC watch "$session" "$state_dir"
    # Outputs only new lines as they appear, exits when screen is stable
    ```
 
@@ -99,10 +99,10 @@ The outer Claude keeps track of which files need changing and runs end-to-end te
 
    | Tier | Method | Context cost |
    |------|--------|-------------|
-   | 0 | Auto from `cc_use_watch` (last ● block, filtered) | ~10 tokens |
-   | 1 | `cc_use_glance` (last 10 lines) | ~15 tokens |
-   | 2 | `cc_use_scroll` (page up 30 lines at a time, no overlap) | ~45 tokens/page |
-   | 3 | `cc_use_read_conversation` (parse JSONL transcript) | varies |
+   | 0 | Auto from `$CC watch` (last ● block, filtered) | ~10 tokens |
+   | 1 | `$CC glance` (last 10 lines) | ~15 tokens |
+   | 2 | `$CC scroll` (page up 30 lines at a time, no overlap) | ~45 tokens/page |
+   | 3 | `$CC read_conversation` (parse JSONL transcript) | varies |
 
 6. **Acceptance testing is black-box**: the outer Claude tests like a real user — running commands, calling APIs, using agent-browser for UI verification. It reads documentation but NOT source code.
 

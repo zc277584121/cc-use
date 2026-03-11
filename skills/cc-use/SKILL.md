@@ -43,31 +43,31 @@ Think of yourself as a **tech lead**, not an implementer:
 
 ## Helper Scripts
 
-All tmux operations are provided as shell functions in `scripts/cc-use-lib.sh`. **Source it first** in any Bash call:
+All tmux operations are provided via a dispatcher script. Define a shorthand alias at the start of each session:
 
 ```bash
-source ${CLAUDE_SKILL_DIR}/scripts/cc-use-lib.sh
+CC="${CLAUDE_SKILL_DIR}/scripts/cc-use"
 ```
 
-Key functions:
+Then call commands as `$CC <command> [args...]`:
 
-| Function | Purpose |
-|----------|---------|
-| `cc_use_launch <session> <project_dir> <state_dir> [perm_flags]` | Create tmux session and start claude |
-| `cc_use_stop <session>` | Gracefully exit claude and kill session |
-| `cc_use_restart <session> [perm_flags]` | Restart claude (for config changes), restores window size |
-| `cc_use_send <session> "prompt text"` | Send prompt (flattened to single line), handles long text |
-| `cc_use_send_file <session> <file>` | Send prompt from file |
-| `cc_use_cmd <session> "/command"` | Send a slash command |
-| `cc_use_glance <session> [lines]` | Quick screen capture from bottom (default 40 lines) |
-| `cc_use_scroll <session> <page> [page_size]` | Page through scrollback: page 0=bottom, 1=one page up, etc. (default 30 lines/page) |
-| `cc_use_read_conversation <project_dir> [last_n]` | Read last N complete assistant messages from JSONL transcript (Tier 3) |
-| `cc_use_read_tools <project_dir> [last_n]` | Show tool calls + text summary for last N messages (quick activity overview) |
-| `cc_use_watch <session> <state_dir> [...]` | Full monitoring: outputs incremental diffs + Tier 0. Use after sending a task |
-| `cc_use_watch <session>` | Quiet mode: just waits for idle, outputs only "IDLE after Xs". Use for startup/menu wait |
-| `cc_use_is_idle <session>` | Check if inner Claude is at ❯ prompt and not thinking (exit code 0 = idle) |
-| `cc_use_wait_shell <session> [max_iter]` | Wait for claude to exit to shell |
-| `cc_use_fix_size <session>` | Restore window to 220x50 (after user attach/detach) |
+| Command | Purpose |
+|---------|---------|
+| `$CC launch <session> <project_dir> <state_dir> [perm_flags]` | Create tmux session and start claude |
+| `$CC stop <session>` | Gracefully exit claude and kill session |
+| `$CC restart <session> [perm_flags]` | Restart claude (for config changes), restores window size |
+| `$CC send <session> "prompt text"` | Send prompt (flattened to single line), handles long text |
+| `$CC send_file <session> <file>` | Send prompt from file |
+| `$CC cmd <session> "/command"` | Send a slash command |
+| `$CC glance <session> [lines]` | Quick screen capture from bottom (default 40 lines) |
+| `$CC scroll <session> <page> [page_size]` | Page through scrollback: page 0=bottom, 1=one page up, etc. (default 30 lines/page) |
+| `$CC read_conversation <project_dir> [last_n]` | Read last N complete assistant messages from JSONL transcript (Tier 3) |
+| `$CC read_tools <project_dir> [last_n]` | Show tool calls + text summary for last N messages (quick activity overview) |
+| `$CC watch <session> <state_dir> [...]` | Full monitoring: outputs incremental diffs + Tier 0. Use after sending a task |
+| `$CC watch <session>` | Quiet mode: just waits for idle, outputs only "IDLE after Xs". Use for startup/menu wait |
+| `$CC is_idle <session>` | Check if inner Claude is at ❯ prompt and not thinking (exit code 0 = idle) |
+| `$CC wait_shell <session> [max_iter]` | Wait for claude to exit to shell |
+| `$CC fix_size <session>` | Restore window to 220x50 (after user attach/detach) |
 
 ## Directory Structure
 
@@ -106,13 +106,12 @@ my-project/
 ### Phase 2: Launch Inner Claude
 
 ```bash
-source ${CLAUDE_SKILL_DIR}/scripts/cc-use-lib.sh
-cc_use_launch "$session_name" "$project_dir" "$(pwd)/state" "--dangerously-skip-permissions"
+$CC launch "$session_name" "$project_dir" "$(pwd)/state" "--dangerously-skip-permissions"
 ```
 
 Wait for Claude to be ready, then send the task prompt:
 ```bash
-cc_use_watch "$session_name" && cc_use_send "$session_name" "Your task description here"
+$CC watch "$session_name" && $CC send "$session_name" "Your task description here"
 ```
 
 For long prompts, write to a file first:
@@ -122,7 +121,7 @@ cat > /tmp/cc-use-prompt.txt <<'PROMPT'
 ### Goal
 ...
 PROMPT
-cc_use_send_file "$session_name" /tmp/cc-use-prompt.txt
+$CC send_file "$session_name" /tmp/cc-use-prompt.txt
 ```
 
 ### Phase 3: Monitor and Steer (Core Loop)
@@ -132,8 +131,7 @@ Repeat this cycle until the goal is achieved:
 #### Step 1: Watch for inner Claude to finish
 
 ```bash
-source ${CLAUDE_SKILL_DIR}/scripts/cc-use-lib.sh
-cc_use_watch "$session_name" "$(pwd)/state"
+$CC watch "$session_name" "$(pwd)/state"
 ```
 
 This is a **single Bash call** that monitors via screen-diff:
@@ -151,21 +149,21 @@ Note: Some incremental diffs may be Claude Code UI refreshes (progress timers, s
 
 #### Step 1b: Progressive reading (expand only if needed)
 
-`cc_use_watch` already gives you Tier 0 (last 3 lines) on exit. Only expand if that's not enough:
+`$CC watch` already gives you Tier 0 (last 3 lines) on exit. Only expand if that's not enough:
 
 | Tier | What | When to use | Context cost |
 |------|------|-------------|-------------|
-| **0** | Auto from `cc_use_watch` (filtered, up to 8 lines) | Always — shows inner Claude's last response summary | ~10 tokens |
-| **1** | `cc_use_glance "$session" 10` | Need a quick summary of what happened | ~15 tokens |
-| **2** | `cc_use_scroll "$session" 0` then `1`, `2`... | Scroll up page by page (30 lines each, no overlap) | ~45 tokens/page |
-| **3** | `cc_use_read_conversation "$project_dir"` or `cc_use_read_tools "$project_dir"` | Need full assistant response or activity overview (JSONL parsing) | varies |
+| **0** | Auto from `$CC watch` (filtered, up to 8 lines) | Always — shows inner Claude's last response summary | ~10 tokens |
+| **1** | `$CC glance "$session" 10` | Need a quick summary of what happened | ~15 tokens |
+| **2** | `$CC scroll "$session" 0` then `1`, `2`... | Scroll up page by page (30 lines each, no overlap) | ~45 tokens/page |
+| **3** | `$CC read_conversation "$project_dir"` or `$CC read_tools "$project_dir"` | Need full assistant response or activity overview (JSONL parsing) | varies |
 
 **Tier 2 example — scrolling up like a human:**
 ```bash
-cc_use_scroll "$session" 0     # page 0: most recent 30 lines
+$CC scroll "$session" 0     # page 0: most recent 30 lines
 # not enough? scroll up:
-cc_use_scroll "$session" 1     # page 1: previous 30 lines (no overlap with page 0)
-cc_use_scroll "$session" 2     # page 2: even further back
+$CC scroll "$session" 1     # page 1: previous 30 lines (no overlap with page 0)
+$CC scroll "$session" 2     # page 2: even further back
 ```
 
 **Rule: start from Tier 0, only go deeper if information is insufficient.** Most monitoring cycles only need Tier 0 or 1.
@@ -175,17 +173,16 @@ cc_use_scroll "$session" 2     # page 2: even further back
 | Situation | Action |
 |-----------|--------|
 | Inner Claude completed a step successfully | Send next instruction or move to verification |
-| Inner Claude is going in the wrong direction | `cc_use_send "$session" "correction..."` |
+| Inner Claude is going in the wrong direction | `$CC send "$session" "correction..."` |
 | Inner Claude hit an error it can't resolve | Analyze the error, send guidance |
 | A milestone is reached | Run verification yourself (tests, browser checks) |
-| Inner Claude's context is getting full | `cc_use_cmd "$session" "/compact focus on ..."` |
+| Inner Claude's context is getting full | `$CC cmd "$session" "/compact focus on ..."` |
 | Goal is fully achieved | Move to Phase 4 (Acceptance) |
 
 **WARNING — Command accumulation**: Always check idle state before sending. If you send commands while inner Claude is busy, they queue and fire in rapid succession.
 
 ```bash
-source ${CLAUDE_SKILL_DIR}/scripts/cc-use-lib.sh
-cc_use_is_idle "$session_name" && cc_use_send "$session_name" "Next instruction..."
+$CC is_idle "$session_name" && $CC send "$session_name" "Next instruction..."
 ```
 
 ### Phase 4: Acceptance Testing
@@ -209,8 +206,7 @@ See @references/acceptance-testing.md for detailed patterns and examples.
 ### Phase 5: Cleanup
 
 ```bash
-source ${CLAUDE_SKILL_DIR}/scripts/cc-use-lib.sh
-cc_use_stop "$session_name"
+$CC stop "$session_name"
 ```
 
 Then: report results to user, and check `.cc-use/state/env-changes.md` for any environment changes that need reverting.
@@ -219,11 +215,11 @@ Then: report results to user, and check `.cc-use/state/env-changes.md` for any e
 
 | Command | How |
 |---------|-----|
-| Compress context | `cc_use_cmd "$session" "/compact focus on <task>"` |
-| Clear context | `cc_use_cmd "$session" "/clear"` |
-| Check context usage | `cc_use_cmd "$session" "/context"` then `cc_use_glance "$session" 20` |
-| Switch model | `cc_use_cmd "$session" "/model sonnet"` |
-| Restart (config changed) | `cc_use_restart "$session" "--dangerously-skip-permissions"` |
+| Compress context | `$CC cmd "$session" "/compact focus on <task>"` |
+| Clear context | `$CC cmd "$session" "/clear"` |
+| Check context usage | `$CC cmd "$session" "/context"` then `$CC glance "$session" 20` |
+| Switch model | `$CC cmd "$session" "/model sonnet"` |
+| Restart (config changed) | `$CC restart "$session" "--dangerously-skip-permissions"` |
 
 ### What requires restart vs what doesn't:
 
@@ -232,8 +228,8 @@ Then: report results to user, and check `.cc-use/state/env-changes.md` for any e
 | Edit CLAUDE.md | No — dynamically loaded |
 | Edit SKILL.md (via --add-dir) | No — hot-reloaded |
 | `/reload-plugins` | No — reloads immediately |
-| Add MCP server | **Yes** — `cc_use_restart` |
-| Change settings.json | **Yes** — `cc_use_restart` |
+| Add MCP server | **Yes** — `$CC restart` |
+| Change settings.json | **Yes** — `$CC restart` |
 
 ## Delegation Discipline
 
