@@ -114,45 +114,22 @@ The outer Claude keeps track of which files need changing and runs end-to-end te
 
 ## Install
 
-**Step 1: Install the skill**
-
 ```bash
 npx skills add zc277584121/cc-use
-```
-
-**Step 2: Install the `ccu` command**
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/zc277584121/cc-use/main/ccu -o ~/.local/bin/ccu && chmod +x ~/.local/bin/ccu
-```
-
-If `~/.local/bin` is not in your PATH, add it:
-
-```bash
-echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc  # or ~/.zshrc
-source ~/.bashrc
 ```
 
 ### Update
 
 ```bash
-# Update skill
 npx skills add zc277584121/cc-use
-
-# Update ccu command
-curl -fsSL https://raw.githubusercontent.com/zc277584121/cc-use/main/ccu -o ~/.local/bin/ccu && chmod +x ~/.local/bin/ccu
 ```
 
 ## Usage
 
 ```bash
 cd your-project
-
-# Interactive mode — tell Claude your goal after it starts
 claude
-
-# Or pass the task directly via ccu shortcut
-ccu "Fix the auth bug in issue #142"
+# Then tell Claude your goal, it will use the cc-use skill to delegate work
 ```
 
 The skill guides Claude to:

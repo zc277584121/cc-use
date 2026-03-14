@@ -105,7 +105,7 @@ cc_use_send_file() {
   local file="$2"
 
   local flat
-  flat=$(cat "$file" | tr '\n' ' ')
+  flat=$(tr '\n' ' ' < "$file")
   tmux send-keys -t "$session" "$flat"
   sleep 1
   tmux send-keys -t "$session" Enter
@@ -289,7 +289,7 @@ cc_use_watch() {
   if [ -z "$state_dir" ]; then
     quiet=true
     screen_file=$(mktemp)
-    interval="${interval:-5}"
+    interval=5
     quiet_count=2
   else
     screen_file="$state_dir/last-screen.txt"
@@ -407,8 +407,7 @@ cc_use_is_alive() {
 # --- Waiting ---
 
 cc_use_wait_idle() {
-  # DEPRECATED: Use cc_use_watch "$session" (quiet mode) instead.
-  # Kept for backward compatibility.
+  # Thin wrapper: waits for idle using watch quiet mode.
   local session="$1"
   local max="${2:-120}"
   local interval="${3:-5}"

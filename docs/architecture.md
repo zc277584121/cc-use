@@ -256,7 +256,7 @@ stateDiagram-v2
 ```
 my-project/
 ├── .cc-use/
-│   ├── CLAUDE.md                  # Auto-generated: instructs outer Claude to use cc-use
+│   ├── cc                            # Dispatcher symlink (created during init)
 │   └── state/
 │       ├── session-info.json      # Session config (name, perms, project path)
 │       ├── last-screen.txt        # Previous tmux snapshot (for diffing)
