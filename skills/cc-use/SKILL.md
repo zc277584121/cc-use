@@ -67,11 +67,12 @@ Call commands as `.cc-use/cc <command> [args...]`:
 
 ## Directory Structure
 
-You operate from the `.cc-use/` directory inside the user's project:
+You operate from the **project root directory**. State files are stored in `.cc-use/`:
 
 ```
-my-project/
-├── .cc-use/                          # Your working directory
+my-project/                           # Your working directory (project root)
+├── .cc-use/
+│   ├── cc                            # Dispatcher symlink (created during init)
 │   └── state/
 │       ├── session-info.json         # tmux session config and permission mode
 │       ├── last-screen.txt           # Last captured tmux screen (for diff monitoring)
@@ -93,17 +94,17 @@ my-project/
    ```bash
    mkdir -p .cc-use/state
    ln -sf "${CLAUDE_SKILL_DIR}/scripts/cc-use" .cc-use/cc
-   project_dir="$(cd .. && pwd)"
+   project_dir="$(pwd)"
    session_name="cc-use-$(basename "$project_dir")"
    ```
-   Write `session-info.json` with the session name, permission mode, and project path.
+   Write `.cc-use/state/session-info.json` with the session name, permission mode, and project path.
 
-3. **Understand the project**: Read `../CLAUDE.md` if it exists, but remember — that file contains instructions for the inner Claude's development work, not directives for you.
+3. **Understand the project**: Read `CLAUDE.md` if it exists, but remember — that file contains instructions for the inner Claude's development work, not directives for you.
 
 ### Phase 2: Launch Inner Claude
 
 ```bash
-.cc-use/cc launch "$session_name" "$project_dir" "$(pwd)/state" "--dangerously-skip-permissions"
+.cc-use/cc launch "$session_name" "$project_dir" ".cc-use/state" "--dangerously-skip-permissions"
 ```
 
 Wait for Claude to be ready, then send the task prompt:
@@ -128,7 +129,7 @@ Repeat this cycle until the goal is achieved:
 #### Step 1: Watch for inner Claude to finish
 
 ```bash
-.cc-use/cc watch "$session_name" "$(pwd)/state"
+.cc-use/cc watch "$session_name" ".cc-use/state"
 ```
 
 This is a **single Bash call** that monitors via screen-diff:

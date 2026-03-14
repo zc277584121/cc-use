@@ -20,28 +20,6 @@ if ! command -v tmux &>/dev/null; then
   exit 1
 fi
 
-# --- Setup ---
-
-mkdir -p .cc-use/state
-
-# Auto-trigger cc-use skill via CLAUDE.md in .cc-use/
-if [ ! -f .cc-use/CLAUDE.md ]; then
-  cat > .cc-use/CLAUDE.md <<'CLAUDEMD'
-You are the **outer Claude** (supervisor) in a cc-use session.
-
-Use the cc-use skill for ALL tasks. Your job is to:
-1. Launch an inner Claude in tmux to do the implementation work
-2. Monitor progress via screen-diff
-3. Steer and correct as needed
-4. Run end-to-end acceptance tests
-5. Report results to the user
-
-The user's project is in the parent directory (`../`). Do NOT read source code or edit files directly — delegate everything to the inner Claude.
-CLAUDEMD
-fi
-
-cd .cc-use
-
 # --- Launch ---
 
 if [ $# -gt 0 ]; then

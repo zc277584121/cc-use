@@ -74,7 +74,7 @@ The outer Claude keeps track of which files need changing and runs end-to-end te
 
 ## How It Works (Technical)
 
-1. **You start Claude in `.cc-use/`** inside your project. This is the outer Claude's workspace.
+1. **You start Claude in your project root**. The outer Claude works from the project directory, storing state in `.cc-use/`.
 
 2. **Outer Claude launches inner Claude in tmux**:
    ```bash
@@ -149,9 +149,9 @@ curl -fsSL https://raw.githubusercontent.com/zc277584121/cc-use/main/ccu -o ~/.l
 cd your-project
 
 # Interactive mode — tell Claude your goal after it starts
-ccu
+claude
 
-# Or pass the task directly
+# Or pass the task directly via ccu shortcut
 ccu "Fix the auth bug in issue #142"
 ```
 
