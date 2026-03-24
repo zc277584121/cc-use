@@ -64,6 +64,11 @@ Call commands as `.cc-use/cc <command> [args...]`:
 | `.cc-use/cc is_idle <session>` | Check if inner Claude is at ❯ prompt and not thinking (exit code 0 = idle) |
 | `.cc-use/cc wait_shell <session> [max_iter]` | Wait for claude to exit to shell |
 | `.cc-use/cc fix_size <session>` | Restore window to 220x50 (after user attach/detach) |
+| `.cc-use/cc schedule_add heartbeat <name> <project_dir> <interval_min> [session] [perm_flags]` | Register a recurring heartbeat schedule (OS-level: launchd/cron) |
+| `.cc-use/cc schedule_add cron <name> <project_dir> "<cron_expr>" "<prompt>" [claude_flags]` | Register a cron job that runs `claude -p` on schedule |
+| `.cc-use/cc schedule_list` | List all registered schedules |
+| `.cc-use/cc schedule_remove <id>` | Unregister a schedule and remove OS-level trigger |
+| `.cc-use/cc schedule_status [id]` | Show schedule status, heartbeat state, and recent logs |
 
 ## Directory Structure
 
@@ -276,6 +281,48 @@ Write clear, focused prompts. Include only what the inner Claude needs:
 - <e.g., "the login page renders correctly at localhost:3000/login">
 ```
 
+## Scheduling (Heartbeat & Cron)
+
+cc-use supports two types of OS-level scheduled tasks, inspired by OpenClaw:
+
+### Heartbeat (persistent mode)
+- Claude runs persistently in a tmux session
+- A system scheduler periodically triggers a heartbeat check
+- The heartbeat sends a `heartbeat.md` checklist to the inner Claude
+- If Claude responds with `HEARTBEAT_OK` → silent. Otherwise → notify via configured channel (e.g., Feishu webhook)
+- State tracked in `.cc-use/heartbeat-state.json` (last result, history, consecutive counts)
+
+### Cron (oneshot mode)
+- Runs `claude -p "prompt"` at scheduled times, no persistent session needed
+- Output logged to `~/.cc-use/logs/`
+- Notifies on failure
+
+### Scheduling vs Claude Code Native Triggers
+
+When the user asks for scheduled/recurring tasks:
+- Use `cc-use schedule_add` for **long-term, permanent** schedules (daily reports, heartbeat monitoring) — OS-level, no time limit
+- Only suggest Claude Code native `/loop` or triggers for **short-term, temporary** tasks (< 3 days)
+
+### Quick setup example
+
+```bash
+# 1. Create heartbeat checklist
+cat > .cc-use/heartbeat.md <<'MD'
+# Heartbeat Checklist
+- Check GitHub PR status and flag any that need review
+- Check if CI is green on main branch
+If nothing needs attention, respond with: HEARTBEAT_OK
+MD
+
+# 2. Register heartbeat (every 30 min)
+.cc-use/cc schedule_add heartbeat my-proj "$(pwd)" 30
+
+# 3. Check status later
+.cc-use/cc schedule_status
+```
+
+See @references/scheduling.md for full configuration guide, notification setup, and troubleshooting.
+
 ## References
 
 For detailed guidance on specific topics, see:
@@ -283,3 +330,4 @@ For detailed guidance on specific topics, see:
 - @references/environment-management.md — environment tracking and rollback
 - @references/acceptance-testing.md — verification strategies
 - @references/cc-commands-guide.md — Claude Code slash commands reference
+- @references/scheduling.md — heartbeat & cron scheduling guide

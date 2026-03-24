@@ -22,19 +22,36 @@ cc_use_launch() {
   # Kill existing session if any
   tmux kill-session -t "$session" 2>/dev/null
 
-  # Create session with fixed dimensions
-  tmux new-session -d -s "$session" -c "$project_dir" -x 220 -y 50
+  # Detect if TERM workaround is needed.
+  # On macOS, tmux defaults to TERM=tmux-256color which causes Claude Code's Ink TUI
+  # to enable Kitty keyboard protocol, making tmux send-keys Enter act as newline
+  # instead of submit. TERM=screen disables this. Linux tmux typically defaults to
+  # TERM=screen so this isn't needed there.
+  # See: https://github.com/anthropics/claude-code/issues/15553
+  local current_default
+  current_default=$(tmux show-option -gv default-terminal 2>/dev/null || echo "unknown")
+  if [ "$current_default" != "screen" ] && [ "$current_default" != "screen-256color" ]; then
+    tmux new-session -d -s "$session" -x 220 -y 50 \
+      "cd '$project_dir' && TERM=screen exec ${SHELL:-/bin/sh}"
+    local needs_bounce=true
+  else
+    tmux new-session -d -s "$session" -c "$project_dir" -x 220 -y 50
+    local needs_bounce=false
+  fi
   tmux set-option -t "$session" history-limit 50000
+  sleep 1
 
   # Clear screen snapshot state
   rm -f "$state_dir/last-screen.txt"
 
-  # Launch claude
+  # Build claude command
   if [ -n "$perm_flags" ]; then
-    tmux send-keys -t "$session" "claude $perm_flags" Enter
+    local claude_cmd="claude $perm_flags"
   else
-    tmux send-keys -t "$session" "claude" Enter
+    local claude_cmd="claude"
   fi
+
+  tmux send-keys -t "$session" "$claude_cmd" Enter
 
   # Auto-confirm "trust this folder" dialog if it appears
   sleep 5
@@ -42,6 +59,16 @@ cc_use_launch() {
   screen=$(tmux capture-pane -t "$session" -p 2>/dev/null)
   if echo "$screen" | grep -q "Yes, I trust this folder"; then
     tmux send-keys -t "$session" Enter
+  fi
+
+  # On macOS (needs_bounce=true): the first Claude Code launch in a fresh tmux pane
+  # has a bug where Enter is treated as newline. Bouncing (C-c + restart) resets the
+  # terminal raw mode and fixes it. On Linux this is skipped.
+  if $needs_bounce; then
+    cc_use_wait_idle "$session" 60
+    tmux send-keys -t "$session" C-c
+    cc_use_wait_shell "$session" 5 || sleep 3
+    tmux send-keys -t "$session" "$claude_cmd" Enter
   fi
 
   echo "Launched in tmux session '$session'"
@@ -423,7 +450,7 @@ cc_use_wait_shell() {
   for i in $(seq 1 "$max"); do
     local output
     output=$(tmux capture-pane -t "$session" -p 2>/dev/null | tail -5)
-    if echo "$output" | grep -qE '^\$|^\(base\)|^[a-z]+@'; then
+    if echo "$output" | grep -qE '^\$|^\%|^\(base\)|^[a-z]+@'; then
       echo "Shell prompt returned after $((i * 2))s"
       return 0
     fi
