@@ -181,7 +181,13 @@ watch_exit=$?
 
 # ─── Step 6: Read response ──────────────────────────────────────────
 
-response=$(cc_use_glance "$session_name" 30)
+# Prefer read_conversation (extracts actual Claude reply from JSONL transcript)
+# over glance (which captures the entire tmux screen including startup banners).
+response=$(cc_use_read_conversation "$project_dir" 1 2>/dev/null | grep -v '^=== Transcript' | grep -v '^--- MESSAGE')
+if [ -z "$response" ]; then
+  # Fallback to glance if transcript not available
+  response=$(cc_use_glance "$session_name" 15)
+fi
 duration=$(( $(date +%s) - start_time ))
 
 log "Response (${duration}s):"
