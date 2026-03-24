@@ -378,7 +378,7 @@ _cc_use_schedule_add_heartbeat() {
   local name="${1:?Usage: schedule_add heartbeat <name> <project_dir> <interval_min> [session] [perm_flags]}"
   local project_dir="${2:?Missing project_dir}"
   local interval_min="${3:?Missing interval_minutes}"
-  local session_name="${4:-cc-use-${name}}"
+  local session_name="${4:-hb-${name}}"
   local perm_flags="${5:-}"
 
   local id

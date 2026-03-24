@@ -72,6 +72,13 @@ The inner Claude writes the code. The outer Claude manages the environment (inst
 
 The outer Claude keeps track of which files need changing and runs end-to-end tests after each batch. The inner Claude does the actual refactoring work, getting fresh context for each batch.
 
+### Scheduled monitoring and automation
+> "Check my PRs and CI status every 30 minutes, alert me on Feishu if anything needs attention"
+
+cc-use supports OS-level scheduling (cron on Linux, launchd on macOS) for two modes:
+- **Heartbeat**: A persistent tmux session receives a checklist periodically. Claude checks the items and responds with `HEARTBEAT_OK` or an alert. Great for monitoring PRs, CI, disk space, etc.
+- **Cron**: Runs `claude -p "prompt"` as a oneshot job on a schedule. No persistent session — each run is isolated. Good for daily reports, periodic cleanups, etc.
+
 ## How It Works (Technical)
 
 1. **You start Claude in your project root**. The outer Claude works from the project directory, storing state in `.cc-use/`.
@@ -154,6 +161,8 @@ tmux attach -t cc-use-<your-project-name>
 - **Black-box acceptance testing**: Outer Claude tests like a user, not a developer
 - **Environment tracking**: Records system-level changes in `.cc-use/state/env-changes.md`
 - **Restartable inner sessions**: Inner Claude can be restarted with fresh context anytime
+- **Heartbeat scheduling**: OS-level recurring checks via cron/launchd with alert notifications (Feishu, etc.)
+- **Cron jobs**: Run `claude -p` on a schedule for periodic tasks (daily reports, cleanups)
 
 ## Requirements
 
