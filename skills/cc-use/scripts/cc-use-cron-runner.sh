@@ -21,6 +21,17 @@ source "$SCRIPT_DIR/cc-use-schedule.sh"
 export HOME="${HOME:-/Users/$(whoami)}"
 unset CLAUDECODE CLAUDE_CODE_ENTRYPOINT CLAUDE_CODE_SSE_PORT
 
+# ─── Source User Shell Profile ──────────────────────────────────────
+# Cron/launchd runs with minimal env — source user's shell profile to
+# pick up env vars like API tokens, PATH additions, etc.
+
+for rc in "$HOME/.bashrc" "$HOME/.zshrc" "$HOME/.profile"; do
+  if [ -f "$rc" ]; then
+    source "$rc" 2>/dev/null || true
+    break
+  fi
+done
+
 # ─── Load Config ─────────────────────────────────────────────────────
 
 _cc_use_schedule_init
