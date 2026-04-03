@@ -81,10 +81,18 @@ cd "$project_dir" || {
   exit 1
 }
 
-# Execute claude with the prompt
-# Redirect stdin from /dev/null to avoid "no stdin data" warning
-output=$("$claude_path" $claude_flags "$prompt" --output-format text < /dev/null 2>&1)
-exit_code=$?
+# If prompt is a path to an executable file, run it directly instead of
+# passing it to claude -p (which would just describe the script).
+if [ -f "$prompt" ] && [ -x "$prompt" ]; then
+  log "Detected executable script prompt, running directly: $prompt"
+  output=$("$prompt" 2>&1)
+  exit_code=$?
+else
+  # Execute claude with the prompt
+  # Redirect stdin from /dev/null to avoid "no stdin data" warning
+  output=$("$claude_path" $claude_flags "$prompt" --output-format text < /dev/null 2>&1)
+  exit_code=$?
+fi
 
 duration=$(( $(date +%s) - start_time ))
 
