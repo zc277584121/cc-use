@@ -1,175 +1,299 @@
 # cc-use
 
-A Claude Code skill that lets an outer Claude supervise an inner Claude running in tmux — offloading implementation work to keep the outer context lean for long-running task management.
+cc-use is a skill for delegating long-running coding work to an inner CC session
+running in tmux. The user-facing interface is the skill, not the CLI.
 
-## The Problem
+The outer agent stays in the main interactive TUI, starts or reuses an inner
+CC session, sends the task there, monitors by screen stability, and performs
+final acceptance checks itself.
 
-When you use Claude Code for complex tasks, **everything accumulates in one context window**: every file read, every code edit, every test output, every debugging iteration. A typical bug fix might consume 50k+ tokens just on implementation details, leaving little room for the bigger picture.
+Here, **CC** means a coding command-line agent. Depending on the host and local
+configuration, that can mean Claude Code, Codex CLI, or another compatible
+coding CLI. The important part is the supervision pattern: one outer interactive
+agent delegates implementation work to an inner terminal session.
 
-This means:
-- Long tasks hit context limits and require manual `/compact` or restarts
-- Claude loses track of the overall goal while deep in code details
-- You can't manage multi-step workflows that span hours of work
+## How Users Invoke It
 
-## How cc-use Solves It
+Use cc-use from an interactive coding-agent session by mentioning the skill and
+the task in natural language.
 
-cc-use splits the work into two layers:
+### Codex CLI
 
-```
-┌─────────────────────────────────────────┐
-│  Outer Claude (Supervisor)              │  Lean context:
-│  ├── Understands the goal               │  sees only incremental
-│  ├── Designs the task prompt            │  screen diffs, not
-│  ├── Monitors progress via tmux         │  full output
-│  ├── Steers & corrects when needed      │
-│  ├── End-to-end acceptance testing      │
-│  └── Reports results to user            │
-└────────────────┬────────────────────────┘
-                 │ tmux send-keys / capture-pane
-┌────────────────▼────────────────────────┐
-│  Inner Claude (Worker)                  │  Full context:
-│  ├── Reads source code                  │  all the code,
-│  ├── Writes & edits files               │  edits, tests,
-│  ├── Runs tests & debugs               │  and debugging
-│  ├── Handles all implementation detail  │  live here
-│  └── Can be restarted with fresh context│
-└─────────────────────────────────────────┘
+In Codex CLI, first confirm the skill is visible:
+
+```text
+/skills
 ```
 
-The inner Claude's file reads, code edits, and command outputs **never enter the outer Claude's context**. The outer Claude monitors via screen-diff — comparing tmux snapshots and only seeing incremental changes.
+Then invoke it from the chat:
 
-## Why This Works: The Numbers
+```text
+$cc-use Fix the flaky test in this repo. Let the inner agent investigate and
+implement the fix, then verify it end-to-end.
+```
 
-From real-world testing (fixing a bug in an MCP server project):
+or:
 
-| Metric | Without cc-use (single Claude) | With cc-use (outer) | With cc-use (inner) |
-|--------|-------------------------------|--------------------|--------------------|
-| Context consumed by code details | Everything in one window | Almost zero | All here (isolated) |
-| Can restart with fresh context | Loses all progress | N/A (stays lean) | Yes, outer re-sends task |
-| Typical context per monitoring cycle | N/A | ~20-50 tokens (screen-diff) | N/A |
+```text
+Use cc-use to add a small CLI command to this project. Let the inner agent do
+the implementation and come back when it has a result to verify.
+```
 
-**Key insight**: The inner Claude can be restarted with fresh context at any time. The outer Claude re-sends a task prompt, and the inner Claude picks up where it left off — with a clean context window. This means the overall workflow length is no longer bounded by context limits.
+The outer agent should load `cc-use` skill instructions and run the underlying
+delegation commands itself. The user should not need to type tmux or `uv run`
+commands.
 
-## Use Cases
+### Claude Code
 
-### Long implementation tasks
-> "Add user authentication to this app — registration, login, JWT tokens, password reset"
+In Claude Code, confirm the skill is available:
 
-One Claude would exhaust its context halfway through. With cc-use, the outer Claude manages the multi-step plan while cycling through inner Claude sessions for each sub-task.
+```text
+/skills
+```
 
-### Bug fixes with verification
-> "Fix issue #142 and verify it end-to-end"
+Then ask for it explicitly:
 
-The outer Claude reproduces the bug first (black-box, like a real user), delegates the fix to the inner Claude, then verifies the fix end-to-end — without ever reading the source code itself.
+```text
+Use the cc-use skill to refactor the database module. Delegate the implementation
+to an inner session and keep me updated only when there is something to review.
+```
 
-### Plugin / MCP / Skill development and testing
-> "Develop this MCP server and test it actually works"
+or:
 
-The inner Claude writes the code. The outer Claude manages the environment (install dependencies, configure MCP, restart Claude when config changes), and tests the result by actually connecting and calling tools.
+```text
+Use cc-use for this long task: implement password reset, run the tests, and let
+me know when the outer verification should start.
+```
 
-### Refactoring with confidence
-> "Refactor the database layer to use the new ORM"
+The exact trigger syntax may differ by host, but the reliable pattern is to name
+the skill directly: `cc-use`, `$cc-use`, or `Use the cc-use skill...`.
 
-The outer Claude keeps track of which files need changing and runs end-to-end tests after each batch. The inner Claude does the actual refactoring work, getting fresh context for each batch.
+## What The Skill Does
 
-### Scheduled monitoring and automation
-> "Check my PRs and CI status every 30 minutes, alert me on Feishu if anything needs attention"
+When invoked, the outer agent should:
 
-cc-use supports OS-level scheduling (cron on Linux, launchd on macOS) for two modes:
-- **Heartbeat**: A persistent tmux session receives a checklist periodically. Claude checks the items and responds with `HEARTBEAT_OK` or an alert. Great for monitoring PRs, CI, disk space, etc.
-- **Cron**: Runs `claude -p "prompt"` as a oneshot job on a schedule. No persistent session — each run is isolated. Good for daily reports, periodic cleanups, etc.
+1. Start or reuse an inner CC session in tmux.
+2. Send the user's task to the inner session.
+3. Avoid reading the inner screen while it is actively changing.
+4. If the screen is quiet past the current expectation, inspect one screen
+   snapshot and decide when to check again.
+5. Steer the inner agent only when needed.
+6. Run final acceptance checks from the outer session.
 
-## How It Works (Technical)
+This keeps the outer context small while the inner session handles code-level
+implementation details.
 
-1. **You start Claude in your project root**. The outer Claude works from the project directory, storing state in `.cc-use/`.
+## Monitoring Model
 
-2. **Outer Claude launches inner Claude in tmux**:
-   ```bash
-   tmux new-session -d -s "cc-use-<project>" -c "<project_dir>" -x 220 -y 50
-   tmux send-keys -t "cc-use-<project>" "claude" Enter
-   ```
+cc-use does not try to parse a specific TUI state. It compares normalized tmux
+screen snapshots:
 
-3. **Task prompts are sent via tmux** (flattened to single line, text and Enter sent separately to avoid paste-bracketing issues):
-   ```bash
-   tmux send-keys -t "cc-use-<project>" "$flat_prompt"
-   sleep 1
-   tmux send-keys -t "cc-use-<project>" Enter
-   ```
+- If the screen changes, the inner agent is considered active and the outer agent
+  stays out of the way.
+- If the screen stays unchanged past the current quiet threshold, cc-use captures
+  one screen snapshot and emits an observation.
+- Each observation includes a suggested next check interval. The outer agent can
+  wait, inspect further, steer the inner session, or start verification.
 
-4. **Monitoring uses screen-diff** — a single Bash call that compares tmux snapshots every 10s. Only incremental changes (≤5 new lines) are output; large changes mean inner Claude is busy and are silently absorbed:
-   ```bash
-   .cc-use/cc watch "$session" "$state_dir"
-   # Outputs only new lines as they appear, exits when screen is stable
-   ```
+## How It Works
 
-5. **Progressive reading** — after monitoring, the outer Claude reads output in tiers, expanding only if needed:
+cc-use treats the tmux pane as the only shared surface between the outer and
+inner agents. The outer agent does not consume the inner agent's file reads,
+tool calls, or command output directly. It only observes the terminal screen at
+controlled moments.
 
-   | Tier | Method | Context cost |
-   |------|--------|-------------|
-   | 0 | Auto from `.cc-use/cc watch` (last ● block, filtered) | ~10 tokens |
-   | 1 | `.cc-use/cc glance` (last 10 lines) | ~15 tokens |
-   | 2 | `.cc-use/cc scroll` (page up 30 lines at a time, no overlap) | ~45 tokens/page |
-   | 3 | `.cc-use/cc read_conversation` (parse JSONL transcript) | varies |
+The loop is:
 
-6. **Acceptance testing is black-box**: the outer Claude tests like a real user — running commands, calling APIs, using agent-browser for UI verification. It reads documentation but NOT source code.
+1. Capture the current tmux screen text.
+2. Normalize it and compute a hash.
+3. If the hash changed, mark the inner session as active and do nothing else.
+4. If the hash stays unchanged long enough, capture one screen snapshot for
+   inspection.
+5. Based on that snapshot, produce an observation with a suggested next check
+   time.
 
-7. **Inner Claude's context can be managed remotely**:
-   ```bash
-   tmux send-keys -t "cc-use-<project>" "/compact focus on current task" Enter
-   tmux send-keys -t "cc-use-<project>" "/clear" Enter
-   ```
+This keeps the outer context small while preserving enough information to make
+human-like supervision decisions.
 
-## Install
+### What The Outer Agent Sees
+
+The outer agent sees a normal terminal screen from the inner CC session. Typical
+examples:
+
+```text
+• Running pytest
+  └ collected 42 items
+```
+
+The screen is changing. cc-use treats this as active work. The outer agent does
+not inspect every line; it waits.
+
+```text
+• Running npm test
+```
+
+The screen may stop changing while a long command is still running. When the
+quiet threshold is reached, cc-use emits an observation. A reasonable decision is
+to wait longer, for example 60-180 seconds, because test/build commands can be
+quiet for a while.
+
+```text
+› Create result.txt with hello.
+
+• DONE
+```
+
+The screen is quiet and appears to show a completed response. The outer agent can
+inspect the result and start acceptance verification.
+
+```text
+Allow this command?
+```
+
+The screen is quiet because the inner session is blocked on input. The outer
+agent should intervene, ask the user if needed, or send an appropriate key.
+
+```text
+network request timed out
+```
+
+The screen is quiet after an error. The outer agent can send a correction or ask
+the inner agent to retry with a different approach.
+
+### Observation Actions
+
+An observation is a structured event written to `.cc-use/state/` and printed to
+the outer agent. It includes:
+
+- how long the screen has been quiet;
+- the current screen hash;
+- the saved screen snapshot path;
+- a suggested action and next check interval.
+
+Example:
+
+```json
+{
+  "event": "observation",
+  "session": "cc-use-my-project",
+  "silence_seconds": 8.005,
+  "decision": {
+    "action": "wait",
+    "next_check_after_seconds": 60,
+    "reason": "No screen changes were observed; wait a moderate interval before checking again.",
+    "confidence": 0.5
+  }
+}
+```
+
+The decision is not a hard rule. It is a scheduling hint for the outer agent.
+
+### Situation To Action
+
+| tmux screen situation | cc-use behavior | outer agent action |
+| --- | --- | --- |
+| Screen keeps changing | Resets quiet timer | Do not inspect; let inner work |
+| Quiet after a short task | Emits observation | Verify files, commands, or UI from outside |
+| Quiet while tests/build likely run | Suggests waiting longer | Call `monitor` later |
+| Quiet on permission/input prompt | Suggests intervention | Send key, steer, or ask user |
+| Quiet after visible error | Emits observation | Send corrective instruction |
+| Session disappeared | Emits `session_unavailable` | Decide whether to restart or report failure |
+
+The important distinction is that cc-use is not an idle detector. It is an
+adaptive observation scheduler: it decides when the outer agent should look
+again if nothing changes.
+
+## Installation
+
+Install using [npx skills](https://skills.sh).
+
+### Install to all supported agents
 
 ```bash
-npx skills add zc277584121/cc-use
+# Global: available in all projects, all supported agents
+npx skills add zc277584121/cc-use --all -g
+
+# Project-level: current project only, all supported agents
+npx skills add zc277584121/cc-use --all
 ```
 
-### Update
+### Install to a specific agent
 
 ```bash
-npx skills add zc277584121/cc-use
+npx skills add zc277584121/cc-use -a claude-code -g
+npx skills add zc277584121/cc-use -a codex -g
 ```
 
-## Usage
+Other supported agents include `cursor`, `windsurf`, `github-copilot`, `cline`,
+`roo`, `gemini-cli`, `goose`, `kilo`, `augment`, `opencode`, and more. See
+[skills.sh](https://skills.sh) for the current list.
+
+Without `-g`, skills are installed into the current project. With `-g`, they are
+installed globally and are available across projects.
+
+## Updating
 
 ```bash
-cd your-project
-claude
-# Then tell Claude your goal, it will use the cc-use skill to delegate work
+# Check for updates
+npx skills check
+
+# Update globally installed skills
+npx skills update
 ```
 
-The skill guides Claude to:
-1. Ask your preferred permission mode for the inner Claude
-2. Launch an inner Claude in tmux
-3. Monitor progress via screen-diff (minimal context usage)
-4. Run end-to-end acceptance tests
-5. Report results
+To update a project-level install, re-run the `npx skills add` command.
 
-You can watch the inner Claude anytime:
+## Local Development Notes
+
+The skill file should be installed where the host agent loads skills from.
+
+On this machine, the installed skill file is:
+
+```text
+/Users/zilliz/.agents/skills/cc-use/SKILL.md
+```
+
+The source copy in this repository is:
+
+```text
+skills/cc-use/SKILL.md
+```
+
+After updating the skill file, restart the interactive agent or reload skills if
+the host supports it.
+
+## Developer Debugging
+
+The shell helper exists for the skill and for maintainers. It is not the normal
+user interface, and it does not require `uv` or a Python package install.
+
+Project-level commands used by the skill:
+
 ```bash
-tmux attach -t cc-use-<your-project-name>
+skills/cc-use/scripts/cc-use delegate "TASK_TEXT" --project "$PWD"
+skills/cc-use/scripts/cc-use monitor --project "$PWD"
+skills/cc-use/scripts/cc-use project-status --project "$PWD"
 ```
 
-## Key Features
+Low-level debugging commands:
 
-- **Context efficiency**: Inner Claude's tool calls never enter outer context
-- **Screen-diff monitoring**: Compares tmux snapshots, outputs only incremental changes (~20-50 tokens/cycle)
-- **Progressive reading**: 4-tier system (auto status → glance → scroll pages → JSONL) — no repeated content
-- **Two-step prompt delivery**: Reliably sends prompts of any length to inner Claude
-- **Inner context management**: Send `/compact`, `/clear`, `/model` to inner Claude via tmux
-- **Black-box acceptance testing**: Outer Claude tests like a user, not a developer
-- **Environment tracking**: Records system-level changes in `.cc-use/state/env-changes.md`
-- **Restartable inner sessions**: Inner Claude can be restarted with fresh context anytime
-- **Heartbeat scheduling**: OS-level recurring checks via cron/launchd with alert notifications (Feishu, etc.)
-- **Cron jobs**: Run `claude -p` on a schedule for periodic tasks (daily reports, cleanups)
+```bash
+skills/cc-use/scripts/cc-use list
+skills/cc-use/scripts/cc-use snapshot <session>
+skills/cc-use/scripts/cc-use kill <session>
+```
 
-## Requirements
+## Runtime State
 
-- `tmux` installed
-- `claude` CLI (Claude Code) installed
-- `jq` installed (for JSONL transcript parsing)
+For each delegated project, cc-use writes state under:
 
-## License
+```text
+.cc-use/state/
+```
 
-MIT
+Important files:
+
+- `session-info.json`: project, session, and agent config.
+- `watch.json`: current watch schedule and latest observation.
+- `watch.observations.jsonl`: observation history.
+- `screens/`: normalized screen snapshots captured during observations.
