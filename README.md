@@ -4,13 +4,14 @@ cc-use is a skill for delegating long-running coding work to an inner CC session
 running in tmux. The user-facing interface is the skill, not the CLI.
 
 The outer agent stays in the main interactive TUI, starts or reuses an inner
-CC session, sends the task there, monitors by screen stability, and performs
-final acceptance checks itself.
+CC session, sends short task requests there, monitors by screen stability, and
+performs final acceptance checks itself.
 
 Here, **CC** means a coding command-line agent. Depending on the host and local
 configuration, that can mean Claude Code, Codex CLI, or another compatible
 coding CLI. The important part is the supervision pattern: one outer interactive
-agent delegates implementation work to an inner terminal session.
+agent breaks the work into short requests and uses an inner terminal session for
+focused execution.
 
 ## How Users Invoke It
 
@@ -72,16 +73,24 @@ the skill directly: `cc-use`, `$cc-use`, or `Use the cc-use skill...`.
 
 When invoked, the outer agent should:
 
-1. Start or reuse an inner CC session in tmux.
-2. Send the user's task to the inner session.
-3. Avoid reading the inner screen while it is actively changing.
-4. If the screen is quiet past the current expectation, inspect one screen
+1. Start or reuse an inner CC session in tmux for the same agent family as the
+   outer session.
+2. Break the user's request into short, focused inner requests.
+3. Send each inner request as written, without adding wrapper instructions or
+   rewriting it.
+4. Avoid reading the inner screen while it is actively changing.
+5. If the screen is quiet past the current expectation, inspect one screen
    snapshot and decide when to check again.
-5. Steer the inner agent only when needed.
-6. Run final acceptance checks from the outer session.
+6. Steer the inner session with another short request only when needed.
+7. Run final acceptance checks from the outer session.
 
-This keeps the outer context small while the inner session handles code-level
-implementation details.
+This keeps the outer context small while preserving outer control over
+decomposition, review, and acceptance.
+
+The tmux session and the interactive inner TUI are the source of truth. Session
+names use the compact `ccu-<project-name>` form, for example `ccu-my-project`.
+If the session already exists, cc-use reuses it; otherwise it creates a new
+persistent TUI.
 
 ## Monitoring Model
 
@@ -187,13 +196,16 @@ Example:
 ```
 
 The decision is not a hard rule. It is a scheduling hint for the outer agent.
+`verify` means the screen looks like a completed inner response, so the outer
+agent should inspect files and run acceptance checks instead of waiting for
+another observation.
 
 ### Situation To Action
 
 | tmux screen situation | cc-use behavior | outer agent action |
 | --- | --- | --- |
 | Screen keeps changing | Resets quiet timer | Do not inspect; let inner work |
-| Quiet after a short task | Emits observation | Verify files, commands, or UI from outside |
+| Quiet after a short task | Suggests `verify` when completion wording is visible | Verify files, commands, or UI from outside |
 | Quiet while tests/build likely run | Suggests waiting longer | Call `monitor` later |
 | Quiet on permission/input prompt | Suggests intervention | Send key, steer, or ask user |
 | Quiet after visible error | Emits observation | Send corrective instruction |
@@ -270,10 +282,25 @@ user interface, and it does not require `uv` or a Python package install.
 Project-level commands used by the skill:
 
 ```bash
-skills/cc-use/scripts/cc-use delegate "TASK_TEXT" --project "$PWD"
-skills/cc-use/scripts/cc-use monitor --project "$PWD"
-skills/cc-use/scripts/cc-use project-status --project "$PWD"
+skills/cc-use/scripts/cc-use delegate "TASK_TEXT" --project "$PWD" --agent codex
+skills/cc-use/scripts/cc-use monitor --project "$PWD" --agent codex
+skills/cc-use/scripts/cc-use project-status --project "$PWD" --agent codex
 ```
+
+`TASK_TEXT` is sent to the inner session exactly as provided. The helper does
+not add role text, policy text, or task wrappers; the outer session is
+responsible for making each request small and concrete.
+
+For Codex, no profile is passed by default. If the user explicitly asks for an
+inner Codex profile when the session is first created, pass it once:
+
+```bash
+skills/cc-use/scripts/cc-use delegate "TASK_TEXT" --project "$PWD" --agent codex --profile zilliz
+```
+
+After the inner TUI exists, future requests reuse the same tmux session and do
+not need the profile again. Claude Code uses its default configuration and does
+not accept `--profile`.
 
 Low-level debugging commands:
 
@@ -283,17 +310,27 @@ skills/cc-use/scripts/cc-use snapshot <session>
 skills/cc-use/scripts/cc-use kill <session>
 ```
 
+## Local Verification
+
+Run the lightweight regression tests from the repository root:
+
+```bash
+bash tests/cc-use-regression.sh
+```
+
+The tests use temporary directories and `PATH` stubs for `tmux`, so they do not
+start a real inner agent session or require external dependencies.
+
 ## Runtime State
 
-For each delegated project, cc-use writes state under:
+For each delegated project, cc-use writes observation state under:
 
 ```text
-.cc-use/state/
+.cc-use/state/<session-name>/
 ```
 
 Important files:
 
-- `session-info.json`: project, session, and agent config.
 - `watch.json`: current watch schedule and latest observation.
 - `watch.observations.jsonl`: observation history.
 - `screens/`: normalized screen snapshots captured during observations.

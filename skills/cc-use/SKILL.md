@@ -30,33 +30,47 @@ The expected user flow is natural language in the outer TUI:
 
 You should then:
 
-1. Start or reuse an inner CC session.
-2. Send the user's task to the inner session.
-3. Monitor by screen stability, not by parsing agent-specific UI rules.
-4. When the screen stays quiet long enough, inspect the observation output and
+1. Start or reuse an inner CC session for the same agent family as the outer
+   session.
+2. Break the user's request into short, focused inner requests.
+3. Send each inner request exactly as written, without wrapper text.
+4. Monitor by screen stability, not by parsing agent-specific UI rules.
+5. When the screen stays quiet long enough, inspect the observation output and
    decide whether to wait, steer, or verify.
-5. Run final acceptance checks yourself from the outer session.
+6. Run final acceptance checks yourself from the outer session.
 
 ## Commands
 
 Run all commands from the target project root.
 
-Start or reuse the inner session, send the task, and wait for one observation:
+Start or reuse the inner session, send one short request, and wait for one
+observation:
 
 ```bash
-<skill_dir>/scripts/cc-use delegate "TASK_TEXT" --project "$PWD"
+<skill_dir>/scripts/cc-use delegate "TASK_TEXT" --project "$PWD" --agent codex
 ```
 
-Monitor again later using saved project state:
+`TASK_TEXT` is passed through unchanged. Do not ask the helper to add role
+instructions or task wrappers; keep decomposition in the outer session.
+
+Use `--agent codex` from Codex and `--agent claude` from Claude Code. Do not
+cross-delegate between agent families.
+
+For Codex, omit `--profile` by default. If the user explicitly requests a
+specific inner Codex profile when the inner session is first created, pass it on
+that first `delegate` call, for example `--profile zilliz`. Existing tmux/TUI
+sessions are reused and do not need the profile on later requests.
+
+Monitor again later using the derived tmux session:
 
 ```bash
-<skill_dir>/scripts/cc-use monitor --project "$PWD"
+<skill_dir>/scripts/cc-use monitor --project "$PWD" --agent codex
 ```
 
-Check saved project state:
+Check the derived project/session status:
 
 ```bash
-<skill_dir>/scripts/cc-use project-status --project "$PWD"
+<skill_dir>/scripts/cc-use project-status --project "$PWD" --agent codex
 ```
 
 Stop the inner session only when no longer needed:
@@ -82,5 +96,6 @@ session=$(<skill_dir>/scripts/cc-use project-status --project "$PWD" --json | jq
 
 - Do not ask the user to run cc-use commands.
 - Do not expose tmux/session/state details unless the user asks.
+- Do not pass or synthesize environment variables for the inner session.
 - Let the inner agent do implementation work.
 - The outer agent owns acceptance testing and final judgment.

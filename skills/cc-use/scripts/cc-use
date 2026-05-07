@@ -4,9 +4,9 @@ set -euo pipefail
 usage() {
   cat <<'EOF'
 Usage:
-  cc-use delegate "TASK" [--project DIR] [--session NAME] [--replace]
-  cc-use monitor [--project DIR]
-  cc-use project-status [--project DIR] [--json]
+  cc-use delegate "TASK" [--project DIR] [--agent codex|claude] [--profile NAME] [--session NAME] [--replace]
+  cc-use monitor [--project DIR] [--agent codex|claude] [--session NAME]
+  cc-use project-status [--project DIR] [--agent codex|claude] [--session NAME] [--json]
   cc-use snapshot SESSION
   cc-use kill SESSION
   cc-use list
@@ -42,9 +42,22 @@ state_dir() {
   printf '%s/state' "$(cc_dir "$1")"
 }
 
+watch_dir() {
+  local project_dir="$1"
+  local session="$2"
+  printf '%s/%s' "$(state_dir "$project_dir")" "$(safe_name "$session")"
+}
+
 session_name_for_project() {
   local project_dir="$1"
-  printf 'cc-use-%s' "$(safe_name "$(basename "$project_dir")")"
+  printf 'ccu-%s' "$(safe_name "$(basename "$project_dir")")"
+}
+
+validate_agent() {
+  case "$1" in
+    codex|claude) ;;
+    *) die "unsupported agent: $1" ;;
+  esac
 }
 
 hash_text() {
@@ -92,19 +105,19 @@ tmux_send_text() {
 }
 
 build_inner_task_prompt() {
-  local task="$1"
-  task="$(printf '%s' "$task" | tr '\n' ' ')"
-  printf '%s' "You are the inner coding agent for cc-use. Do the requested implementation work directly in the current project directory. Do not invoke cc-use, do not start another coding agent, and do not ask the user to run commands. Use your own tools to inspect, edit, and test the project. Task: $task"
+  printf '%s' "$1"
 }
 
-build_cc_command() {
+build_codex_command() {
   local profile="$1"
   local sandbox="$2"
   local approval="$3"
   local codex_bin
   codex_bin="$(resolve_codex_binary)"
-  # Current implementation uses Codex CLI as the default inner CC.
-  printf 'env -u CODEX_MANAGED_BY_NPM -u CODEX_THREAD_ID -u CODEX_CI %q --profile %q --no-alt-screen --ask-for-approval %q --sandbox %q' "$codex_bin" "$profile" "$approval" "$sandbox"
+  printf '%q --no-alt-screen --ask-for-approval %q --sandbox %q' "$codex_bin" "$approval" "$sandbox"
+  if [ -n "$profile" ]; then
+    printf ' --profile %q' "$profile"
+  fi
 }
 
 resolve_codex_binary() {
@@ -129,45 +142,28 @@ resolve_codex_binary() {
   printf '%s' "$codex_path"
 }
 
-save_session_info() {
-  local project_dir="$1"
-  local session="$2"
-  local agent="$3"
-  local profile="$4"
-  local sandbox="$5"
-  local approval="$6"
-  local state
-  state="$(state_dir "$project_dir")"
-  mkdir -p "$state"
-
-  cat > "$state/session-info.env" <<EOF
-project_dir=$(printf '%q' "$project_dir")
-session=$(printf '%q' "$session")
-agent=$(printf '%q' "$agent")
-profile=$(printf '%q' "$profile")
-sandbox=$(printf '%q' "$sandbox")
-approval=$(printf '%q' "$approval")
-EOF
-
-  cat > "$state/session-info.json" <<EOF
-{
-  "agent": "$(printf '%s' "$agent" | json_escape)",
-  "approval": "$(printf '%s' "$approval" | json_escape)",
-  "profile": "$(printf '%s' "$profile" | json_escape)",
-  "project_dir": "$(printf '%s' "$project_dir" | json_escape)",
-  "sandbox": "$(printf '%s' "$sandbox" | json_escape)",
-  "session": "$(printf '%s' "$session" | json_escape)"
-}
-EOF
+resolve_claude_binary() {
+  local claude_path
+  claude_path="$(command -v claude 2>/dev/null || true)"
+  [ -n "$claude_path" ] || die "claude command not found"
+  printf '%s' "$claude_path"
 }
 
-load_session_info() {
-  local target_project="$1"
-  local env_file
-  env_file="$(state_dir "$target_project")/session-info.env"
-  [ -f "$env_file" ] || die "missing session state: $env_file"
-  # shellcheck disable=SC1090
-  source "$env_file"
+build_agent_command() {
+  local agent="$1"
+  local profile="$2"
+  local sandbox="$3"
+  local approval="$4"
+  validate_agent "$agent"
+  case "$agent" in
+    codex)
+      build_codex_command "$profile" "$sandbox" "$approval"
+      ;;
+    claude)
+      [ -z "$profile" ] || die "--profile is only supported for codex"
+      printf '%q --dangerously-skip-permissions' "$(resolve_claude_binary)"
+      ;;
+  esac
 }
 
 write_watch_state() {
@@ -179,7 +175,7 @@ write_watch_state() {
   local observations="$6"
   local last_observation_json="${7:-null}"
   local state
-  state="$(state_dir "$project_dir")"
+  state="$(watch_dir "$project_dir" "$session")"
   mkdir -p "$state"
   cat > "$state/watch.env" <<EOF
 last_digest=$(printf '%q' "$digest")
@@ -201,8 +197,9 @@ EOF
 
 load_watch_state() {
   local project_dir="$1"
+  local session="$2"
   local env_file
-  env_file="$(state_dir "$project_dir")/watch.env"
+  env_file="$(watch_dir "$project_dir" "$session")/watch.env"
   if [ -f "$env_file" ]; then
     # shellcheck disable=SC1090
     source "$env_file"
@@ -224,6 +221,11 @@ decision_for_screen() {
     decision_next=15
     decision_confidence="0.72"
     decision_reason="The terminal may be waiting for explicit user input."
+  elif printf '%s' "$lower" | grep -Eq '(^|[[:space:][:punct:]])(done|completed|finished)([[:space:][:punct:]]|$)|已完成|完成了|处理完毕|final summary|summary of changes|implementation summary|changes made|all requested changes|ready for (outer )?(verification|review)'; then
+    decision_action="verify"
+    decision_next=0
+    decision_confidence="0.74"
+    decision_reason="The terminal appears to show a completed response; the outer agent should verify the work."
   elif printf '%s' "$lower" | grep -Eq 'pytest|npm test|pnpm test|yarn test|cargo test|go test|running (tests?|command|suite|migration|server)'; then
     decision_action="wait"
     if [ "$silence" -lt 180 ]; then decision_next=120; else decision_next=60; fi
@@ -256,12 +258,12 @@ watch_once() {
   local now
   local sleep_for
   local observation_json
-  state="$(state_dir "$project_dir")"
+  state="$(watch_dir "$project_dir" "$session")"
   screens="$state/screens"
   history="$state/watch.observations.jsonl"
   mkdir -p "$state" "$screens"
 
-  load_watch_state "$project_dir"
+  load_watch_state "$project_dir" "$session"
 
   while :; do
     now="$(now_epoch)"
@@ -323,7 +325,8 @@ cmd_delegate() {
   local task="$1"; shift
   local project="."
   local session=""
-  local profile="zilliz"
+  local agent="codex"
+  local profile=""
   local sandbox="workspace-write"
   local approval="never"
   local replace=false
@@ -333,6 +336,7 @@ cmd_delegate() {
   while [ "$#" -gt 0 ]; do
     case "$1" in
       --project) project="$2"; shift 2 ;;
+      --agent) agent="$2"; shift 2 ;;
       --session) session="$2"; shift 2 ;;
       --profile) profile="$2"; shift 2 ;;
       --sandbox) sandbox="$2"; shift 2 ;;
@@ -345,8 +349,8 @@ cmd_delegate() {
     esac
   done
   project="$(project_abs "$project")"
-  [ -n "$session" ] || session="$(session_name_for_project "$project")"
-  save_session_info "$project" "$session" "cc" "$profile" "$sandbox" "$approval"
+  validate_agent "$agent"
+  [ -n "$session" ] || session="$(session_name_for_project "$project" "$agent")"
 
   if $replace && tmux_has_session "$session"; then
     tmux kill-session -t "$session" >/dev/null 2>&1 || true
@@ -355,21 +359,9 @@ cmd_delegate() {
   if ! tmux_has_session "$session"; then
     local command
     local keepalive
-    local env_args=()
-    local env_line
-    local env_key
-    command="$(build_cc_command "$profile" "$sandbox" "$approval")"
-    while IFS= read -r env_line; do
-      env_key="${env_line%%=*}"
-      case "$env_key" in
-        ''|*[!A-Za-z0-9_]*|[0-9]*)
-          continue
-          ;;
-      esac
-      env_args+=("-e" "$env_line")
-    done < <(env)
+    command="$(build_agent_command "$agent" "$profile" "$sandbox" "$approval")"
     keepalive="$command; status=\$?; echo; echo cc-use inner exited:\$status; sleep 3600"
-    tmux new-session -d -s "$session" "${env_args[@]}" -c "$project" "bash -c $(printf '%q' "$keepalive")"
+    tmux new-session -d -s "$session" -c "$project" "bash -lc $(printf '%q' "$keepalive")"
     echo "launched $session: $command"
     sleep 5
     tmux send-keys -t "$session" Enter
@@ -382,12 +374,16 @@ cmd_delegate() {
 
 cmd_monitor() {
   local project="."
+  local agent="codex"
+  local session=""
   local initial_quiet=30
   local poll_interval=2
   local max_observations=1
   while [ "$#" -gt 0 ]; do
     case "$1" in
       --project) project="$2"; shift 2 ;;
+      --agent) agent="$2"; shift 2 ;;
+      --session) session="$2"; shift 2 ;;
       --initial-quiet-seconds) initial_quiet="$2"; shift 2 ;;
       --poll-interval) poll_interval="$2"; shift 2 ;;
       --max-observations) max_observations="$2"; shift 2 ;;
@@ -395,72 +391,90 @@ cmd_monitor() {
     esac
   done
   project="$(project_abs "$project")"
-  load_session_info "$project"
+  validate_agent "$agent"
+  [ -n "$session" ] || session="$(session_name_for_project "$project" "$agent")"
   watch_once "$project" "$session" "$initial_quiet" "$poll_interval" "$max_observations"
 }
 
 cmd_project_status() {
   local project="."
+  local agent="codex"
+  local session=""
   local as_json=false
   while [ "$#" -gt 0 ]; do
     case "$1" in
       --project) project="$2"; shift 2 ;;
+      --agent) agent="$2"; shift 2 ;;
+      --session) session="$2"; shift 2 ;;
       --json) as_json=true; shift ;;
       *) die "unknown project-status option: $1" ;;
     esac
   done
   project="$(project_abs "$project")"
-  load_session_info "$project"
-  local loaded_project_dir="$project_dir"
-  load_watch_state "$project"
-  local now silence remaining
+  validate_agent "$agent"
+  [ -n "$session" ] || session="$(session_name_for_project "$project" "$agent")"
+  load_watch_state "$project" "$session"
+  local now silence remaining available
   now="$(now_epoch)"
-  silence=$((now - ${silence_started_at:-now}))
+  if [ "${silence_started_at:-0}" -le 0 ]; then
+    silence=0
+  else
+    silence=$((now - silence_started_at))
+  fi
   remaining=$((next_check_at - now))
   [ "$remaining" -lt 0 ] && remaining=0
+  if tmux_has_session "$session"; then available=true; else available=false; fi
   if $as_json; then
     cat <<EOF
-{"config":{"project_dir":"$(printf '%s' "$loaded_project_dir" | json_escape)","session":"$(printf '%s' "$session" | json_escape)","agent":"$(printf '%s' "$agent" | json_escape)","profile":"$(printf '%s' "$profile" | json_escape)","sandbox":"$(printf '%s' "$sandbox" | json_escape)","approval":"$(printf '%s' "$approval" | json_escape)"},"watch":{"observation_count":${observation_count:-0},"silence_seconds":$silence,"seconds_until_next_check":$remaining}}
+{"config":{"project_dir":"$(printf '%s' "$project" | json_escape)","session":"$(printf '%s' "$session" | json_escape)","agent":"$(printf '%s' "$agent" | json_escape)","session_available":$available},"watch":{"observation_count":${observation_count:-0},"silence_seconds":$silence,"seconds_until_next_check":$remaining}}
 EOF
   else
-    echo "project: $loaded_project_dir"
+    echo "project: $project"
     echo "session: $session"
     echo "agent: $agent"
+    echo "session_available: $available"
     echo "observations: ${observation_count:-0}"
     echo "silence_seconds: $silence"
     echo "seconds_until_next_check: $remaining"
   fi
 }
 
-cmd="${1:-}"
-[ -n "$cmd" ] || { usage; exit 1; }
-shift || true
+main() {
+  local cmd
+  cmd="${1:-}"
+  [ -n "$cmd" ] || { usage; exit 1; }
+  shift || true
 
-case "$cmd" in
-  delegate)
-    [ "$#" -ge 1 ] || die "delegate requires TASK"
-    task="$1"; shift
-    cmd_delegate "$task" "$@"
-    ;;
-  monitor)
-    cmd_monitor "$@"
-    ;;
-  project-status)
-    cmd_project_status "$@"
-    ;;
-  snapshot)
-    [ "$#" -eq 1 ] || die "snapshot requires SESSION"
-    tmux_capture "$1"
-    ;;
-  kill)
-    [ "$#" -eq 1 ] || die "kill requires SESSION"
-    tmux kill-session -t "$1" >/dev/null 2>&1 || true
-    ;;
-  list)
-    tmux list-sessions -F "#{session_name}" 2>/dev/null || true
-    ;;
-  *)
-    usage
-    exit 1
-    ;;
-esac
+  case "$cmd" in
+    delegate)
+      [ "$#" -ge 1 ] || die "delegate requires TASK"
+      task="$1"; shift
+      cmd_delegate "$task" "$@"
+      ;;
+    monitor)
+      cmd_monitor "$@"
+      ;;
+    project-status)
+      cmd_project_status "$@"
+      ;;
+    snapshot)
+      [ "$#" -eq 1 ] || die "snapshot requires SESSION"
+      tmux_capture "$1"
+      ;;
+    kill)
+      [ "$#" -eq 1 ] || die "kill requires SESSION"
+      tmux kill-session -t "$1" >/dev/null 2>&1 || true
+      ;;
+    list)
+      tmux list-sessions -F "#{session_name}" 2>/dev/null || true
+      ;;
+    *)
+      usage
+      exit 1
+      ;;
+  esac
+}
+
+if [ "${BASH_SOURCE[0]}" = "$0" ]; then
+  main "$@"
+fi
