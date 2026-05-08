@@ -92,6 +92,12 @@ names use the compact `ccu-<project-name>` form, for example `ccu-my-project`.
 If the session already exists, cc-use reuses it; otherwise it creates a new
 persistent TUI.
 
+The inner session is intentionally persistent. The outer agent should leave it
+running after routine task completion so later work can continue in the same
+project context, even across separate outer conversations or later days. Close
+it only when the user explicitly asks, or when the session is broken and a fresh
+one is required.
+
 ## Monitoring Model
 
 cc-use does not try to parse a specific TUI state. It compares normalized tmux
@@ -101,8 +107,10 @@ screen snapshots:
   stays out of the way.
 - If the screen stays unchanged past the current quiet threshold, cc-use captures
   one screen snapshot and emits an observation.
-- Each observation includes a suggested next check interval. The outer agent can
-  wait, inspect further, steer the inner session, or start verification.
+- Each observation is a neutral `inspect` event. The helper does not try to
+  classify stable screens as waiting, blocked, or complete. The outer agent reads
+  the saved snapshot and decides whether to wait, inspect further, steer the
+  inner session, or start verification.
 
 ## How It Works
 
@@ -118,8 +126,7 @@ The loop is:
 3. If the hash changed, mark the inner session as active and do nothing else.
 4. If the hash stays unchanged long enough, capture one screen snapshot for
    inspection.
-5. Based on that snapshot, produce an observation with a suggested next check
-   time.
+5. Produce a neutral observation pointing at that snapshot.
 
 This keeps the outer context small while preserving enough information to make
 human-like supervision decisions.
@@ -142,9 +149,9 @@ not inspect every line; it waits.
 ```
 
 The screen may stop changing while a long command is still running. When the
-quiet threshold is reached, cc-use emits an observation. A reasonable decision is
-to wait longer, for example 60-180 seconds, because test/build commands can be
-quiet for a while.
+quiet threshold is reached, cc-use emits an `inspect` observation. The outer
+agent reads the snapshot and may decide to wait longer, for example 60-180
+seconds, because test/build commands can be quiet for a while.
 
 ```text
 › Create result.txt with hello.
@@ -169,7 +176,7 @@ network request timed out
 The screen is quiet after an error. The outer agent can send a correction or ask
 the inner agent to retry with a different approach.
 
-### Observation Actions
+### Observations
 
 An observation is a structured event written to `.cc-use/state/` and printed to
 the outer agent. It includes:
@@ -177,43 +184,53 @@ the outer agent. It includes:
 - how long the screen has been quiet;
 - the current screen hash;
 - the saved screen snapshot path;
-- a suggested action and next check interval.
+- a neutral `inspect` action.
 
 Example:
 
 ```json
 {
   "event": "observation",
-  "session": "cc-use-my-project",
+  "session": "ccu-my-project",
   "silence_seconds": 8.005,
+  "screen_path": ".cc-use/state/ccu-my-project/screens/ccu-my-project-0001.txt",
   "decision": {
-    "action": "wait",
-    "next_check_after_seconds": 60,
-    "reason": "No screen changes were observed; wait a moderate interval before checking again.",
-    "confidence": 0.5
+    "action": "inspect",
+    "next_check_after_seconds": 0,
+    "reason": "The screen is stable; inspect screen_path semantically before deciding whether to wait, steer, or verify.",
+    "confidence": 1.0
   }
 }
 ```
 
-The decision is not a hard rule. It is a scheduling hint for the outer agent.
-`verify` means the screen looks like a completed inner response, so the outer
-agent should inspect files and run acceptance checks instead of waiting for
-another observation.
+`inspect` means only that the screen has been stable long enough to look at it.
+The outer agent must inspect `screen_path` semantically before deciding whether
+to wait, steer, ask the user, continue delegation, or run acceptance checks.
+
+If the saved snapshot does not include enough context, read recent tmux
+scrollback on demand:
+
+```bash
+skills/cc-use/scripts/cc-use scrollback --project "$PWD" --agent codex --lines 2000
+```
+
+This command prints recent scrollback for temporary inspection. cc-use does not
+persist long-running transcript logs by default.
 
 ### Situation To Action
 
 | tmux screen situation | cc-use behavior | outer agent action |
 | --- | --- | --- |
 | Screen keeps changing | Resets quiet timer | Do not inspect; let inner work |
-| Quiet after a short task | Suggests `verify` when completion wording is visible | Verify files, commands, or UI from outside |
-| Quiet while tests/build likely run | Suggests waiting longer | Call `monitor` later |
-| Quiet on permission/input prompt | Suggests intervention | Send key, steer, or ask user |
+| Quiet after a short task | Emits `inspect` | Verify files, commands, or UI from outside if the snapshot is complete |
+| Quiet while tests/build likely run | Emits `inspect` | Call `monitor` later if the snapshot shows work still running |
+| Quiet on permission/input prompt | Emits `inspect` | Send key, steer, or ask user |
 | Quiet after visible error | Emits observation | Send corrective instruction |
 | Session disappeared | Emits `session_unavailable` | Decide whether to restart or report failure |
 
 The important distinction is that cc-use is not an idle detector. It is an
-adaptive observation scheduler: it decides when the outer agent should look
-again if nothing changes.
+adaptive observation scheduler: it decides when the outer agent should look, not
+what the stable screen means.
 
 ## Installation
 
@@ -285,6 +302,7 @@ Project-level commands used by the skill:
 skills/cc-use/scripts/cc-use delegate "TASK_TEXT" --project "$PWD" --agent codex
 skills/cc-use/scripts/cc-use monitor --project "$PWD" --agent codex
 skills/cc-use/scripts/cc-use project-status --project "$PWD" --agent codex
+skills/cc-use/scripts/cc-use scrollback --project "$PWD" --agent codex --lines 2000
 ```
 
 `TASK_TEXT` is sent to the inner session exactly as provided. The helper does
@@ -309,6 +327,9 @@ skills/cc-use/scripts/cc-use list
 skills/cc-use/scripts/cc-use snapshot <session>
 skills/cc-use/scripts/cc-use kill <session>
 ```
+
+`kill` is for explicit cleanup or recovery. It is not part of the normal
+completion flow.
 
 ## Local Verification
 

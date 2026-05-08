@@ -71,6 +71,13 @@ case "\$mode:\$1" in
   snapshot:capture-pane)
     printf '\\033[31mred\\033[0m  \n'
     ;;
+  scrollback:capture-pane)
+    if [ "\$6" = "-2000" ]; then
+      printf 'older line\ncurrent line  \n'
+    else
+      exit 2
+    fi
+    ;;
   unavailable:capture-pane)
     exit 1
     ;;
@@ -101,31 +108,9 @@ assert_contains "$codex_command" "--profile zilliz" "build_codex_command include
 
 screen_file="$tmp_root/screen.txt"
 printf 'Allow this command?\n' > "$screen_file"
-decision_for_screen "$screen_file" 10
-assert_eq "intervene" "$decision_action" "decision_for_screen detects input prompts"
-assert_eq "15" "$decision_next" "decision_for_screen schedules prompt follow-up quickly"
-
-printf 'Running npm test\n' > "$screen_file"
-decision_for_screen "$screen_file" 20
-assert_eq "wait" "$decision_action" "decision_for_screen waits for test commands"
-assert_eq "120" "$decision_next" "decision_for_screen allows quiet tests to continue"
-
-printf '• DONE\n' > "$screen_file"
-decision_for_screen "$screen_file" 20
-assert_eq "verify" "$decision_action" "decision_for_screen detects DONE completion markers"
-assert_eq "0" "$decision_next" "decision_for_screen schedules immediate verification for DONE markers"
-
-printf 'Task completed successfully.\n' > "$screen_file"
-decision_for_screen "$screen_file" 20
-assert_eq "verify" "$decision_action" "decision_for_screen detects completed markers"
-
-printf '已完成 requested implementation and tests.\n' > "$screen_file"
-decision_for_screen "$screen_file" 20
-assert_eq "verify" "$decision_action" "decision_for_screen detects Chinese completion markers"
-
-printf 'Final summary:\n- Updated files\n- Ran npm test\n' > "$screen_file"
-decision_for_screen "$screen_file" 20
-assert_eq "verify" "$decision_action" "decision_for_screen detects final-summary wording before test commands"
+decision_for_stable_screen
+assert_eq "inspect" "$decision_action" "stable screen observations require semantic inspection"
+assert_eq "0" "$decision_next" "stable screen observations do not schedule heuristic waiting"
 
 run_capture output status "$SCRIPT"
 [ "$status" -eq 1 ] || fail "missing command should exit 1"
@@ -146,6 +131,12 @@ write_tmux_stub "$stub_dir" snapshot
 run_capture output status env PATH="$stub_dir:$PATH" "$SCRIPT" snapshot fake-session
 [ "$status" -eq 0 ] || fail "snapshot with tmux stub should exit 0"
 assert_eq "red" "$output" "snapshot strips ANSI escapes and trailing spaces"
+
+stub_dir="$tmp_root/stub-scrollback"
+write_tmux_stub "$stub_dir" scrollback
+run_capture output status env PATH="$stub_dir:$PATH" "$SCRIPT" scrollback --project "$tmp_root" --agent codex --lines 2000
+[ "$status" -eq 0 ] || fail "scrollback with tmux stub should exit 0"
+assert_eq $'older line\ncurrent line' "$output" "scrollback captures requested history and normalizes output"
 
 project="$tmp_root/project"
 mkdir -p "$project"

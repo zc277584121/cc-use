@@ -35,8 +35,8 @@ You should then:
 2. Break the user's request into short, focused inner requests.
 3. Send each inner request exactly as written, without wrapper text.
 4. Monitor by screen stability, not by parsing agent-specific UI rules.
-5. When the screen stays quiet long enough, inspect the observation output and
-   decide whether to wait, steer, or verify.
+5. When the screen stays quiet long enough, inspect the saved screen snapshot
+   semantically and decide whether to wait, steer, or verify.
 6. Run final acceptance checks yourself from the outer session.
 
 ## Commands
@@ -73,12 +73,19 @@ Check the derived project/session status:
 <skill_dir>/scripts/cc-use project-status --project "$PWD" --agent codex
 ```
 
-Stop the inner session only when no longer needed:
+If the saved screen snapshot does not include enough context, inspect recent
+tmux scrollback on demand. This is a temporary read, not a persistent transcript:
 
 ```bash
-session=$(<skill_dir>/scripts/cc-use project-status --project "$PWD" --json | jq -r .config.session)
-<skill_dir>/scripts/cc-use kill "$session"
+<skill_dir>/scripts/cc-use scrollback --project "$PWD" --agent codex --lines 2000
 ```
+
+Keep the inner session running by default. A long-running project may span
+multiple outer conversations or calendar days, and the existing tmux/TUI session
+preserves useful continuity for later work.
+
+Only stop the inner session if the user explicitly asks you to close it, or if
+the session is broken and you have decided a fresh session is required.
 
 ## Monitoring Model
 
@@ -87,15 +94,18 @@ session=$(<skill_dir>/scripts/cc-use project-status --project "$PWD" --json | jq
 - If the tmux screen changes, the outer agent does not read details and lets the
   inner agent keep working.
 - If the screen stays unchanged past the current quiet threshold, cc-use captures
-  the screen once and emits an observation with a suggested next check interval.
-- Treat the suggested interval as a scheduling hint. If it says wait, call
-  `monitor` again later. If it suggests intervention, inspect the screen or send
-  a correction.
+  the screen once and emits a neutral `inspect` observation.
+- The helper does not classify stable screens as wait, intervene, or verify.
+  Always read `screen_path` and make the semantic decision in the outer session.
+- If the snapshot is too narrow, use `scrollback --lines N` for temporary
+  context. Do not create persistent transcript logs by default.
 
 ## Discipline
 
 - Do not ask the user to run cc-use commands.
 - Do not expose tmux/session/state details unless the user asks.
 - Do not pass or synthesize environment variables for the inner session.
+- Do not kill the inner session at routine task completion; leave it available
+  for future delegated work.
 - Let the inner agent do implementation work.
 - The outer agent owns acceptance testing and final judgment.

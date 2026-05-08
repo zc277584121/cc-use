@@ -7,6 +7,7 @@ Usage:
   cc-use delegate "TASK" [--project DIR] [--agent codex|claude] [--profile NAME] [--session NAME] [--replace]
   cc-use monitor [--project DIR] [--agent codex|claude] [--session NAME]
   cc-use project-status [--project DIR] [--agent codex|claude] [--session NAME] [--json]
+  cc-use scrollback [--project DIR] [--agent codex|claude] [--session NAME] [--lines N]
   cc-use snapshot SESSION
   cc-use kill SESSION
   cc-use list
@@ -82,6 +83,12 @@ tmux_has_session() {
 
 tmux_capture() {
   tmux capture-pane -t "$1" -p 2>/dev/null | normalize_screen
+}
+
+tmux_capture_scrollback() {
+  local session="$1"
+  local lines="$2"
+  tmux capture-pane -t "$session" -p -S "-$lines" 2>/dev/null | normalize_screen
 }
 
 tmux_send_text() {
@@ -211,37 +218,11 @@ load_watch_state() {
   fi
 }
 
-decision_for_screen() {
-  local screen_file="$1"
-  local silence="$2"
-  local lower
-  lower="$(tr '[:upper:]' '[:lower:]' < "$screen_file")"
-  if printf '%s' "$lower" | grep -Eq 'permission|approve|allow|continue\?|password'; then
-    decision_action="intervene"
-    decision_next=15
-    decision_confidence="0.72"
-    decision_reason="The terminal may be waiting for explicit user input."
-  elif printf '%s' "$lower" | grep -Eq '(^|[[:space:][:punct:]])(done|completed|finished)([[:space:][:punct:]]|$)|已完成|完成了|处理完毕|final summary|summary of changes|implementation summary|changes made|all requested changes|ready for (outer )?(verification|review)'; then
-    decision_action="verify"
-    decision_next=0
-    decision_confidence="0.74"
-    decision_reason="The terminal appears to show a completed response; the outer agent should verify the work."
-  elif printf '%s' "$lower" | grep -Eq 'pytest|npm test|pnpm test|yarn test|cargo test|go test|running (tests?|command|suite|migration|server)'; then
-    decision_action="wait"
-    if [ "$silence" -lt 180 ]; then decision_next=120; else decision_next=60; fi
-    decision_confidence="0.66"
-    decision_reason="The terminal looks like it may be running a command that can stay quiet for a while."
-  elif printf '%s' "$lower" | grep -Eq 'npm (install|ci|run build)|pnpm (install|run build)|yarn (install|build)|pip install|uv sync|building|compiling|bundling|installing|downloading'; then
-    decision_action="wait"
-    decision_next=180
-    decision_confidence="0.64"
-    decision_reason="The terminal looks like it may be doing long-running setup or build work."
-  else
-    decision_action="wait"
-    decision_next=60
-    decision_confidence="0.5"
-    decision_reason="No screen changes were observed; wait a moderate interval before checking again."
-  fi
+decision_for_stable_screen() {
+  decision_action="inspect"
+  decision_next=0
+  decision_confidence="1.0"
+  decision_reason="The screen is stable; inspect screen_path semantically before deciding whether to wait, steer, or verify."
 }
 
 watch_once() {
@@ -299,7 +280,7 @@ watch_once() {
       observation_count=$((observation_count + 1))
       screen_path="$screens/$(safe_name "$session")-$(printf '%04d' "$observation_count").txt"
       cp "$curr" "$screen_path"
-      decision_for_screen "$curr" "$silence"
+      decision_for_stable_screen
       observation_json="{\"event\":\"observation\",\"session\":\"$(printf '%s' "$session" | json_escape)\",\"observed_at\":$now,\"silence_seconds\":$silence,\"screen_digest\":\"$digest\",\"screen_path\":\"$(printf '%s' "$screen_path" | json_escape)\",\"decision\":{\"action\":\"$decision_action\",\"next_check_after_seconds\":$decision_next,\"reason\":\"$(printf '%s' "$decision_reason" | json_escape)\",\"confidence\":$decision_confidence}}"
       next_check_at=$((now + decision_next))
       write_watch_state "$project_dir" "$session" "$digest" "$silence_started_at" "$next_check_at" "$observation_count" "$observation_json"
@@ -396,6 +377,30 @@ cmd_monitor() {
   watch_once "$project" "$session" "$initial_quiet" "$poll_interval" "$max_observations"
 }
 
+cmd_scrollback() {
+  local project="."
+  local agent="codex"
+  local session=""
+  local lines=2000
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --project) project="$2"; shift 2 ;;
+      --agent) agent="$2"; shift 2 ;;
+      --session) session="$2"; shift 2 ;;
+      --lines) lines="$2"; shift 2 ;;
+      *) die "unknown scrollback option: $1" ;;
+    esac
+  done
+  case "$lines" in
+    ''|*[!0-9]*) die "--lines must be a positive integer" ;;
+  esac
+  [ "$lines" -gt 0 ] || die "--lines must be a positive integer"
+  project="$(project_abs "$project")"
+  validate_agent "$agent"
+  [ -n "$session" ] || session="$(session_name_for_project "$project" "$agent")"
+  tmux_capture_scrollback "$session" "$lines"
+}
+
 cmd_project_status() {
   local project="."
   local agent="codex"
@@ -456,6 +461,9 @@ main() {
       ;;
     project-status)
       cmd_project_status "$@"
+      ;;
+    scrollback)
+      cmd_scrollback "$@"
       ;;
     snapshot)
       [ "$#" -eq 1 ] || die "snapshot requires SESSION"
