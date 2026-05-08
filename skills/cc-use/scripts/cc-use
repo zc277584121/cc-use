@@ -133,9 +133,7 @@ build_codex_command() {
   local profile="$1"
   local sandbox="$2"
   local approval="$3"
-  local codex_bin
-  codex_bin="$(resolve_codex_binary)"
-  printf '%q --no-alt-screen --ask-for-approval %q --sandbox %q' "$codex_bin" "$approval" "$sandbox"
+  printf '%q --no-alt-screen --ask-for-approval %q --sandbox %q' "codex" "$approval" "$sandbox"
   if [ -n "$profile" ]; then
     printf ' --profile %q' "$profile"
   fi
@@ -182,9 +180,23 @@ build_agent_command() {
       ;;
     claude)
       [ -z "$profile" ] || die "--profile is only supported for codex"
-      printf '%q --dangerously-skip-permissions' "$(resolve_claude_binary)"
+      printf '%q --dangerously-skip-permissions' "claude"
       ;;
   esac
+}
+
+launch_agent_session() {
+  local session="$1"
+  local project="$2"
+  local command="$3"
+
+  tmux new-session -d -s "$session" -c "$project"
+  tmux set-option -t "$session" history-limit 50000 >/dev/null 2>&1 || true
+
+  # Start the agent from the pane's interactive shell so user shell startup files
+  # can populate PATH, provider keys, and other local environment settings.
+  sleep 1
+  tmux send-keys -t "$session" "$command" Enter
 }
 
 write_watch_state() {
@@ -353,10 +365,8 @@ cmd_delegate() {
 
   if ! tmux_has_session "$session"; then
     local command
-    local keepalive
     command="$(build_agent_command "$agent" "$profile" "$sandbox" "$approval")"
-    keepalive="$command; status=\$?; echo; echo cc-use inner exited:\$status; sleep 3600"
-    tmux new-session -d -s "$session" -c "$project" "bash -lc $(printf '%q' "$keepalive")"
+    launch_agent_session "$session" "$project" "$command"
     echo "launched $session: $command"
     sleep 5
     tmux send-keys -t "$session" Enter

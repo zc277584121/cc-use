@@ -139,6 +139,25 @@ run_capture output status env PATH="$stub_dir:$PATH" "$SCRIPT" snapshot fake-ses
 [ "$status" -eq 0 ] || fail "snapshot with tmux stub should exit 0"
 assert_eq "red" "$output" "snapshot strips ANSI escapes and trailing spaces"
 
+stub_dir="$tmp_root/stub-launch"
+mkdir -p "$stub_dir"
+cat > "$stub_dir/tmux" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "$CC_USE_TMUX_LOG"
+exit 0
+EOF
+chmod +x "$stub_dir/tmux"
+launch_log="$tmp_root/launch.log"
+run_capture output status env PATH="$stub_dir:$PATH" CC_USE_TMUX_LOG="$launch_log" bash -c '
+  source "$1"
+  launch_agent_session test-session /tmp/project "codex --profile zilliz"
+' _ "$SCRIPT"
+[ "$status" -eq 0 ] || fail "launch_agent_session with tmux stub should exit 0"
+launch_output="$(cat "$launch_log")"
+assert_contains "$launch_output" "new-session -d -s test-session -c /tmp/project" "launch_agent_session starts an interactive shell in the project"
+assert_contains "$launch_output" "send-keys -t test-session codex --profile zilliz Enter" "launch_agent_session starts the agent via shell input"
+assert_not_contains "$launch_output" "bash -lc" "launch_agent_session does not bypass shell startup files"
+
 stub_dir="$tmp_root/stub-scrollback"
 write_tmux_stub "$stub_dir" scrollback
 run_capture output status env PATH="$stub_dir:$PATH" "$SCRIPT" scrollback --project "$tmp_root" --agent codex --lines 2000
