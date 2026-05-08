@@ -80,9 +80,8 @@ Use cc-use to add a small CLI command to this project. Let the inner agent do
 the implementation and come back when it has a result to verify.
 ```
 
-The outer agent should load `cc-use` skill instructions and run the underlying
-delegation commands itself. The user should not need to type tmux or `uv run`
-commands.
+The outer agent loads the `cc-use` skill instructions and uses the helper for
+delegation, monitoring, and verification workflow support.
 
 ### Claude Code
 
@@ -150,6 +149,30 @@ Inner CC session in tmux            |
                                    |
                                    v
                          Outer acceptance checks
+```
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor User
+    participant Outer as Outer agent
+    participant Helper as cc-use helper
+    participant Tmux as tmux session
+    participant Inner as Inner CC session
+
+    User->>Outer: Long task request
+    Outer->>Helper: delegate(short task)
+    Helper->>Tmux: create or reuse ccu-project
+    Helper->>Inner: send task text unchanged
+    Inner-->>Tmux: update terminal screen
+    Helper->>Tmux: monitor screen stability
+    Helper-->>Outer: inspect observation + screen_path
+    Outer->>Outer: read snapshot semantically
+    alt more work needed
+        Outer->>Helper: delegate(next short task)
+    else ready to verify
+        Outer->>Outer: run acceptance checks
+    end
 ```
 
 The tmux session and the interactive inner TUI are the source of truth. Session
@@ -220,6 +243,31 @@ emit inspect observation
       |
       v
 outer agent reads screen_path and decides
+```
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant Outer as Outer agent
+    participant Helper as cc-use monitor
+    participant Tmux as tmux pane
+    participant State as .cc-use/state
+
+    Outer->>Helper: monitor(project, agent)
+    loop until screen is quiet
+        Helper->>Tmux: capture-pane
+        Helper->>Helper: normalize + hash
+        alt hash changed
+            Helper->>State: update digest and reset quiet timer
+        else quiet threshold reached
+            Helper->>State: save screen snapshot
+            Helper-->>Outer: inspect observation
+        else still within quiet window
+            Helper->>Helper: sleep and poll again
+        end
+    end
+    Outer->>State: read screen_path
+    Outer->>Outer: decide wait, steer, ask, or verify
 ```
 
 ### What The Outer Agent Sees
@@ -317,6 +365,20 @@ skills/cc-use/scripts/cc-use scrollback --project "$PWD" --agent codex --start -
 Negative numbers refer to scrollback history, `0` is the first visible line, and
 `-` means the end of the visible pane. cc-use does not persist long-running
 transcript logs by default.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant Outer as Outer agent
+    participant Helper as cc-use scrollback
+    participant Tmux as tmux pane
+
+    Outer->>Helper: scrollback(--start -4000, --end -2001)
+    Helper->>Tmux: capture-pane -S -4000 -E -2001
+    Tmux-->>Helper: normalized temporary text
+    Helper-->>Outer: print text to stdout
+    Note over Helper,Outer: No transcript file is created
+```
 
 ### Situation To Action
 
