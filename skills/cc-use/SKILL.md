@@ -21,6 +21,51 @@ Here, **CC** means a coding command-line agent. Depending on the host and local
 configuration, that can mean Claude Code, Codex CLI, or another compatible
 coding CLI.
 
+## When To Use This Skill
+
+Use cc-use for long-term tasks where the outer session should keep the global
+state clean and deliberate while an inner interactive session handles focused
+execution. The point is not just parallelism; it is supervision. The outer
+session keeps the plan, product intent, risks, compatibility concerns, and
+acceptance criteria in view while the inner session does bounded work.
+
+This helps when a task is long enough that a single conversation may lose local
+details, pollute context with logs, or drift away from the top-level objective.
+The inner session can do implementation, command execution, exploration, and
+interactive TUI work, while the outer session preserves a compact supervisory
+context and performs final judgment.
+
+Do not pass the whole long-term task to the inner session as one giant prompt.
+Break it into small, concrete requests, then inspect, steer, and refine like a
+human supervisor would:
+
+1. Ask for one focused investigation, implementation step, test case, or
+   verification action.
+2. Wait for an `inspect` observation.
+3. Read the snapshot semantically.
+4. Decide the next short request, wait, intervene, ask the user, or verify.
+5. Repeat until the outer session has enough evidence to accept or reject the
+   work.
+
+Good scenarios:
+
+- **End-to-end verification:** The outer session acts like a tester. It asks the
+  inner session to run realistic workflows, edge cases, and command sequences,
+  then evaluates the reported result and runs any final checks itself.
+- **Task decomposition and implementation:** For a large project with a plan or
+  design document, the outer session decomposes the plan into small
+  implementation requests and feeds them to the inner session one at a time.
+- **Adversarial testing:** The outer session designs high-level adversarial
+  cases based on project history, product positioning, architecture,
+  compatibility requirements, and likely regressions. The inner session executes
+  those cases and reports what happens.
+- **Interactive product testing:** For TUI products such as Claude Code, Codex
+  CLI, or plugin/skill/MCP workflows, normal one-shot command tests may be
+  insufficient. The inner session can install the in-development skill, MCP
+  server, or plugin inside an interactive terminal environment, then receive
+  follow-up input from the outer session to validate that the integration works
+  in the real TUI.
+
 ## User Experience
 
 The expected user flow is natural language in the outer TUI:
