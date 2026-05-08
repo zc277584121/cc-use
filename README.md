@@ -214,8 +214,18 @@ scrollback on demand:
 skills/cc-use/scripts/cc-use scrollback --project "$PWD" --agent codex --lines 2000
 ```
 
-This command prints recent scrollback for temporary inspection. cc-use does not
-persist long-running transcript logs by default.
+This command prints recent scrollback for temporary inspection. To page through
+older output without rereading the same lines, specify an explicit tmux line
+range:
+
+```bash
+skills/cc-use/scripts/cc-use scrollback --project "$PWD" --agent codex --start -4000 --end -2001
+skills/cc-use/scripts/cc-use scrollback --project "$PWD" --agent codex --start -2000 --end -
+```
+
+Negative numbers refer to scrollback history, `0` is the first visible line, and
+`-` means the end of the visible pane. cc-use does not persist long-running
+transcript logs by default.
 
 ### Situation To Action
 
@@ -303,6 +313,7 @@ skills/cc-use/scripts/cc-use delegate "TASK_TEXT" --project "$PWD" --agent codex
 skills/cc-use/scripts/cc-use monitor --project "$PWD" --agent codex
 skills/cc-use/scripts/cc-use project-status --project "$PWD" --agent codex
 skills/cc-use/scripts/cc-use scrollback --project "$PWD" --agent codex --lines 2000
+skills/cc-use/scripts/cc-use scrollback --project "$PWD" --agent codex --start -4000 --end -2001
 ```
 
 `TASK_TEXT` is sent to the inner session exactly as provided. The helper does

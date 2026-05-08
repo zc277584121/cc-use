@@ -80,6 +80,15 @@ tmux scrollback on demand. This is a temporary read, not a persistent transcript
 <skill_dir>/scripts/cc-use scrollback --project "$PWD" --agent codex --lines 2000
 ```
 
+For paged inspection, use tmux line ranges. Negative numbers refer to scrollback
+history, `0` is the first visible line, and `-` means the end of the visible
+pane:
+
+```bash
+<skill_dir>/scripts/cc-use scrollback --project "$PWD" --agent codex --start -4000 --end -2001
+<skill_dir>/scripts/cc-use scrollback --project "$PWD" --agent codex --start -2000 --end -
+```
+
 Keep the inner session running by default. A long-running project may span
 multiple outer conversations or calendar days, and the existing tmux/TUI session
 preserves useful continuity for later work.
@@ -97,8 +106,9 @@ the session is broken and you have decided a fresh session is required.
   the screen once and emits a neutral `inspect` observation.
 - The helper does not classify stable screens as wait, intervene, or verify.
   Always read `screen_path` and make the semantic decision in the outer session.
-- If the snapshot is too narrow, use `scrollback --lines N` for temporary
-  context. Do not create persistent transcript logs by default.
+- If the snapshot is too narrow, use `scrollback --lines N` or
+  `scrollback --start LINE --end LINE` for temporary context. Do not create
+  persistent transcript logs by default.
 
 ## Discipline
 

@@ -72,8 +72,15 @@ case "\$mode:\$1" in
     printf '\\033[31mred\\033[0m  \n'
     ;;
   scrollback:capture-pane)
-    if [ "\$6" = "-2000" ]; then
+    if [ "\$6" = "-2000" ] && [ "\$8" = "-" ]; then
       printf 'older line\ncurrent line  \n'
+    else
+      exit 2
+    fi
+    ;;
+  scrollback-range:capture-pane)
+    if [ "\$6" = "-4000" ] && [ "\$8" = "-2001" ]; then
+      printf 'range line\n'
     else
       exit 2
     fi
@@ -137,6 +144,16 @@ write_tmux_stub "$stub_dir" scrollback
 run_capture output status env PATH="$stub_dir:$PATH" "$SCRIPT" scrollback --project "$tmp_root" --agent codex --lines 2000
 [ "$status" -eq 0 ] || fail "scrollback with tmux stub should exit 0"
 assert_eq $'older line\ncurrent line' "$output" "scrollback captures requested history and normalizes output"
+
+stub_dir="$tmp_root/stub-scrollback-range"
+write_tmux_stub "$stub_dir" scrollback-range
+run_capture output status env PATH="$stub_dir:$PATH" "$SCRIPT" scrollback --project "$tmp_root" --agent codex --start -4000 --end -2001
+[ "$status" -eq 0 ] || fail "scrollback range with tmux stub should exit 0"
+assert_eq "range line" "$output" "scrollback captures explicit start and end range"
+
+run_capture output status "$SCRIPT" scrollback --project "$tmp_root" --agent codex --start abc
+[ "$status" -eq 1 ] || fail "scrollback with invalid start should exit 1"
+assert_contains "$output" "--start must be '-' or an integer line number" "scrollback validates explicit start"
 
 project="$tmp_root/project"
 mkdir -p "$project"
