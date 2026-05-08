@@ -13,6 +13,46 @@ coding CLI. The important part is the supervision pattern: one outer interactive
 agent breaks the work into short requests and uses an inner terminal session for
 focused execution.
 
+## Installation
+
+Install using [npx skills](https://skills.sh).
+
+### Install to all supported agents
+
+```bash
+# Global: available in all projects, all supported agents
+npx skills add zc277584121/cc-use --all -g
+
+# Project-level: current project only, all supported agents
+npx skills add zc277584121/cc-use --all
+```
+
+### Install to a specific agent
+
+```bash
+npx skills add zc277584121/cc-use -a claude-code -g
+npx skills add zc277584121/cc-use -a codex -g
+```
+
+Other supported agents include `cursor`, `windsurf`, `github-copilot`, `cline`,
+`roo`, `gemini-cli`, `goose`, `kilo`, `augment`, `opencode`, and more. See
+[skills.sh](https://skills.sh) for the current list.
+
+Without `-g`, skills are installed into the current project. With `-g`, they are
+installed globally and are available across projects.
+
+## Updating
+
+```bash
+# Check for updates
+npx skills check
+
+# Update globally installed skills
+npx skills update
+```
+
+To update a project-level install, re-run the `npx skills add` command.
+
 ## How Users Invoke It
 
 Use cc-use from an interactive coding-agent session by mentioning the skill and
@@ -87,6 +127,31 @@ When invoked, the outer agent should:
 This keeps the outer context small while preserving outer control over
 decomposition, review, and acceptance.
 
+```text
+User request
+    |
+    v
+Outer agent
+    |  short task text
+    v
+cc-use helper  --------------------+
+    |                              |
+    | tmux send-keys               | tmux capture-pane
+    v                              |
+Inner CC session in tmux            |
+    |                              |
+    +-- implementation work --------+
+                                   |
+                                   v
+                           screen snapshot
+                                   |
+                                   v
+                         Outer semantic review
+                                   |
+                                   v
+                         Outer acceptance checks
+```
+
 The tmux session and the interactive inner TUI are the source of truth. Session
 names use the compact `ccu-<project-name>` form, for example `ccu-my-project`.
 If the session already exists, cc-use reuses it; otherwise it creates a new
@@ -130,6 +195,32 @@ The loop is:
 
 This keeps the outer context small while preserving enough information to make
 human-like supervision decisions.
+
+```text
+capture screen
+      |
+      v
+normalize + hash
+      |
+      +-- hash changed --------------------+
+      |                                    |
+      v                                    |
+reset quiet timer                          |
+      |                                    |
+      +------------------------------------+
+      |
+      v
+hash unchanged long enough
+      |
+      v
+save screen snapshot
+      |
+      v
+emit inspect observation
+      |
+      v
+outer agent reads screen_path and decides
+```
 
 ### What The Outer Agent Sees
 
@@ -235,52 +326,12 @@ transcript logs by default.
 | Quiet after a short task | Emits `inspect` | Verify files, commands, or UI from outside if the snapshot is complete |
 | Quiet while tests/build likely run | Emits `inspect` | Call `monitor` later if the snapshot shows work still running |
 | Quiet on permission/input prompt | Emits `inspect` | Send key, steer, or ask user |
-| Quiet after visible error | Emits observation | Send corrective instruction |
+| Quiet after visible error | Emits `inspect` | Send corrective instruction |
 | Session disappeared | Emits `session_unavailable` | Decide whether to restart or report failure |
 
 The important distinction is that cc-use is not an idle detector. It is an
 adaptive observation scheduler: it decides when the outer agent should look, not
 what the stable screen means.
-
-## Installation
-
-Install using [npx skills](https://skills.sh).
-
-### Install to all supported agents
-
-```bash
-# Global: available in all projects, all supported agents
-npx skills add zc277584121/cc-use --all -g
-
-# Project-level: current project only, all supported agents
-npx skills add zc277584121/cc-use --all
-```
-
-### Install to a specific agent
-
-```bash
-npx skills add zc277584121/cc-use -a claude-code -g
-npx skills add zc277584121/cc-use -a codex -g
-```
-
-Other supported agents include `cursor`, `windsurf`, `github-copilot`, `cline`,
-`roo`, `gemini-cli`, `goose`, `kilo`, `augment`, `opencode`, and more. See
-[skills.sh](https://skills.sh) for the current list.
-
-Without `-g`, skills are installed into the current project. With `-g`, they are
-installed globally and are available across projects.
-
-## Updating
-
-```bash
-# Check for updates
-npx skills check
-
-# Update globally installed skills
-npx skills update
-```
-
-To update a project-level install, re-run the `npx skills add` command.
 
 ## Local Development Notes
 
@@ -366,3 +417,6 @@ Important files:
 - `watch.json`: current watch schedule and latest observation.
 - `watch.observations.jsonl`: observation history.
 - `screens/`: normalized screen snapshots captured during observations.
+
+cc-use does not write persistent transcript logs. Use `scrollback` for temporary
+tmux history inspection when a saved screen snapshot is not enough.
