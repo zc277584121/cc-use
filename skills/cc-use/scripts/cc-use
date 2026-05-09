@@ -229,7 +229,7 @@ build_agent_exec_command() {
       if [ "$search" = "true" ]; then
         printf ' --search'
       fi
-      printf ' exec --cd %q' "$project"
+      printf ' exec --skip-git-repo-check --cd %q' "$project"
       ;;
     claude)
       [ -z "$profile" ] || die "--profile is only supported for codex"
@@ -531,30 +531,24 @@ schedule_log_dir() {
 }
 
 source_user_shell_profile() {
-  local shell_bin
   local env_file
-  local line key value
+  local rc
   local old_umask
-  shell_bin="${SHELL:-/bin/sh}"
-  [ -x "$shell_bin" ] || shell_bin="/bin/sh"
   old_umask="$(umask)"
   umask 077
   env_file="$(mktemp)"
   umask "$old_umask"
   chmod 600 "$env_file" 2>/dev/null || true
-  if "$shell_bin" -ic 'command env' > "$env_file" 2>/dev/null; then
-    while IFS= read -r line; do
-      case "$line" in
-        *=*)
-          key="${line%%=*}"
-          value="${line#*=}"
-          case "$key" in
-            ''|*[!A-Za-z0-9_]*|[0-9]*) ;;
-            *) export "$key=$value" ;;
-          esac
-          ;;
-      esac
-    done < "$env_file"
+  for rc in "$HOME/.zshrc" "$HOME/.bashrc" "$HOME/.profile"; do
+    if [ -f "$rc" ]; then
+      grep -E '^[[:space:]]*export[[:space:]]+[A-Za-z_][A-Za-z0-9_]*=' "$rc" >> "$env_file" 2>/dev/null || true
+    fi
+  done
+  if [ -s "$env_file" ]; then
+    set -a
+    # shellcheck disable=SC1090
+    source "$env_file" >/dev/null 2>&1 || true
+    set +a
   fi
   rm -f "$env_file"
 }

@@ -218,7 +218,7 @@ assert_contains "$output" "zilliz" "schedule-list includes profile"
 
 run_capture output status env HOME="$schedule_home" PATH="$stub_dir:$PATH" "$SCRIPT" schedule-run "$cron_id"
 [ "$status" -eq 0 ] || fail "schedule-run cron should exit 0"
-assert_contains "$(cat "$schedule_home/.cc-use/logs/cron-${cron_id}.log")" "codex args: <--profile> <zilliz> <--ask-for-approval> <never> <--sandbox> <danger-full-access> <--search> <exec>" "schedule-run cron uses stored global options"
+assert_contains "$(cat "$schedule_home/.cc-use/logs/cron-${cron_id}.log")" "codex args: <--profile> <zilliz> <--ask-for-approval> <never> <--sandbox> <danger-full-access> <--search> <exec> <--skip-git-repo-check>" "schedule-run cron uses stored global options"
 assert_contains "$(cat "$schedule_home/.cc-use/logs/cron-${cron_id}.log")" "<--search>" "schedule-run cron uses the stored search flag"
 
 echo "ok - cc-use regression tests passed"
