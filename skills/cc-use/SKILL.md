@@ -238,6 +238,21 @@ preserves useful continuity for later work.
 Only stop the inner session if the user explicitly asks you to close it, or if
 the session is broken and you have decided a fresh session is required.
 
+### Scheduled tasks
+
+cc-use can also register host-local recurring tasks. Use this only when the user
+explicitly asks for a persistent local cron or heartbeat workflow.
+
+- `heartbeat` periodically checks a persistent inner tmux session.
+- `cron` runs a scheduled prompt or executable script.
+- Schedules are agent-neutral; the default `--agent auto` follows the outer
+  session's agent family when the schedule is created.
+- Scheduled runs default to `danger-full-access` and `never` approval so local
+  recurring tasks do not stall on routine filesystem or network access.
+
+For the full workflow, command examples, migration notes, and troubleshooting,
+read `references/schedules.md`.
+
 ## Monitoring Model
 
 `delegate` and `monitor` use adaptive observation:
