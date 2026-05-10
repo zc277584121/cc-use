@@ -366,6 +366,15 @@ Negative numbers refer to scrollback history, `0` is the first visible line, and
 `-` means the end of the visible pane. cc-use does not persist long-running
 transcript logs by default.
 
+For a live read-only view of the inner tmux session, attach with tmux read-only
+mode:
+
+```bash
+tmux attach -r -t <session>
+```
+
+This lets you watch the current pane without sending input to the session.
+
 ```mermaid
 sequenceDiagram
     autonumber

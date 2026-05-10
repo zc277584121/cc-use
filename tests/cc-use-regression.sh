@@ -196,4 +196,48 @@ assert_contains "$output" '"session":"ccu-project"' "project-status JSON include
 assert_contains "$output" '"agent":"claude"' "project-status JSON includes agent"
 assert_contains "$output" '"observation_count":2' "project-status JSON includes watch state"
 
+schedule_home="$tmp_root/schedule-home"
+mkdir -p "$schedule_home"
+stub_dir="$tmp_root/stub-launchctl"
+mkdir -p "$stub_dir"
+cat > "$stub_dir/launchctl" <<'EOF'
+#!/usr/bin/env bash
+exit 0
+EOF
+chmod +x "$stub_dir/launchctl"
+cat > "$stub_dir/codex" <<'EOF'
+#!/usr/bin/env bash
+printf 'codex args:'
+printf ' <%s>' "$@"
+printf '\n'
+exit 0
+EOF
+chmod +x "$stub_dir/codex"
+
+run_capture output status env HOME="$schedule_home" PATH="$stub_dir:$PATH" "$SCRIPT" schedule-add cron daily --project "$project" --cron-expr "0 7 * * *" --prompt "check" --agent codex --profile zilliz --search
+[ "$status" -eq 0 ] || fail "schedule-add cron should exit 0"
+assert_contains "$output" "added cron schedule" "schedule-add cron reports success"
+cron_id="$(jq -r '.schedules[] | select(.type == "cron") | .id' "$schedule_home/.cc-use/schedules.json")"
+assert_contains "$(jq -c '.schedules[0]' "$schedule_home/.cc-use/schedules.json")" '"agent":"codex"' "cron schedule stores agent"
+assert_contains "$(jq -c '.schedules[0]' "$schedule_home/.cc-use/schedules.json")" '"profile":"zilliz"' "cron schedule stores profile"
+assert_contains "$(jq -c '.schedules[0]' "$schedule_home/.cc-use/schedules.json")" '"search":true' "cron schedule stores search flag"
+assert_contains "$(jq -c '.schedules[0]' "$schedule_home/.cc-use/schedules.json")" '"sandbox":"danger-full-access"' "cron schedule defaults to broad sandbox"
+[ -f "$schedule_home/Library/LaunchAgents/com.cc-use.${cron_id}.plist" ] || fail "schedule-add cron writes launchd plist"
+assert_contains "$(plutil -p "$schedule_home/Library/LaunchAgents/com.cc-use.${cron_id}.plist")" "schedule-run" "cron plist calls unified runner"
+
+run_capture output status env HOME="$schedule_home" PATH="$stub_dir:$PATH" "$SCRIPT" schedule-add heartbeat news --project "$project" --interval-minutes 15 --agent codex --profile zilliz --session hb-news
+[ "$status" -eq 0 ] || fail "schedule-add heartbeat should exit 0"
+assert_contains "$output" "added heartbeat schedule" "schedule-add heartbeat reports success"
+assert_contains "$(jq -c '.schedules[] | select(.type == "heartbeat")' "$schedule_home/.cc-use/schedules.json")" '"session_name":"hb-news"' "heartbeat schedule stores explicit session"
+assert_contains "$(jq -c '.schedules[] | select(.type == "heartbeat")' "$schedule_home/.cc-use/schedules.json")" '"sandbox":"danger-full-access"' "heartbeat schedule defaults to broad sandbox"
+
+run_capture output status env HOME="$schedule_home" PATH="$stub_dir:$PATH" "$SCRIPT" schedule-list
+[ "$status" -eq 0 ] || fail "schedule-list should exit 0"
+assert_contains "$output" "zilliz" "schedule-list includes profile"
+
+run_capture output status env HOME="$schedule_home" PATH="$stub_dir:$PATH" "$SCRIPT" schedule-run "$cron_id"
+[ "$status" -eq 0 ] || fail "schedule-run cron should exit 0"
+assert_contains "$(cat "$schedule_home/.cc-use/logs/cron-${cron_id}.log")" "codex args: <--profile> <zilliz> <--ask-for-approval> <never> <--sandbox> <danger-full-access> <--search> <exec> <--skip-git-repo-check>" "schedule-run cron uses stored global options"
+assert_contains "$(cat "$schedule_home/.cc-use/logs/cron-${cron_id}.log")" "<--search>" "schedule-run cron uses the stored search flag"
+
 echo "ok - cc-use regression tests passed"
