@@ -113,6 +113,21 @@ assert_not_contains "$codex_command" "--profile" "build_codex_command omits prof
 codex_command="$(build_codex_command "zilliz" "workspace-write" "never")"
 assert_contains "$codex_command" "--profile zilliz" "build_codex_command includes explicit profile only when requested"
 
+# CC_USE_CODEX_FLAGS env var must fully replace --ask-for-approval and --sandbox
+unset CC_USE_CODEX_FLAGS
+codex_command="$(build_codex_command "" "workspace-write" "never")"
+assert_contains "$codex_command" "--ask-for-approval" "default still includes --ask-for-approval"
+assert_contains "$codex_command" "--sandbox" "default still includes --sandbox"
+
+codex_command="$(CC_USE_CODEX_FLAGS="--dangerously-bypass-approvals-and-sandbox" build_codex_command "" "workspace-write" "never")"
+assert_contains "$codex_command" "dangerously-bypass-approvals-and-sandbox" "CC_USE_CODEX_FLAGS override is applied"
+assert_not_contains "$codex_command" "--ask-for-approval" "CC_USE_CODEX_FLAGS replaces --ask-for-approval"
+assert_not_contains "$codex_command" "--sandbox" "CC_USE_CODEX_FLAGS replaces --sandbox"
+
+codex_command="$(CC_USE_CODEX_FLAGS="--full-auto" build_codex_command "zilliz" "workspace-write" "never")"
+assert_contains "$codex_command" "full-auto" "CC_USE_CODEX_FLAGS works alongside --profile"
+assert_contains "$codex_command" "--profile zilliz" "profile still appended when CC_USE_CODEX_FLAGS is set"
+
 screen_file="$tmp_root/screen.txt"
 printf 'Allow this command?\n' > "$screen_file"
 decision_for_stable_screen

@@ -157,7 +157,18 @@ build_codex_command() {
   local profile="$1"
   local sandbox="$2"
   local approval="$3"
-  printf '%q --no-alt-screen --ask-for-approval %q --sandbox %q' "codex" "$approval" "$sandbox"
+  printf '%q --no-alt-screen' "codex"
+  if [ -n "${CC_USE_CODEX_FLAGS:-}" ]; then
+    # User-supplied flags fully replace the default --ask-for-approval
+    # and --sandbox pair. Set this when the outer Codex is launched with
+    # --dangerously-bypass-approvals-and-sandbox (or --full-auto), since
+    # those modes are logically incompatible with --ask-for-approval /
+    # --sandbox and Codex will fail to start the inner session.
+    # Example: CC_USE_CODEX_FLAGS="--dangerously-bypass-approvals-and-sandbox"
+    printf ' %s' "$CC_USE_CODEX_FLAGS"
+  else
+    printf ' --ask-for-approval %q --sandbox %q' "$approval" "$sandbox"
+  fi
   if [ -n "$profile" ]; then
     printf ' --profile %q' "$profile"
   fi
@@ -237,7 +248,12 @@ build_agent_exec_command() {
       if [ -n "$profile" ]; then
         printf ' --profile %q' "$profile"
       fi
-      printf ' --ask-for-approval %q --sandbox %q' "$approval" "$sandbox"
+      if [ -n "${CC_USE_CODEX_FLAGS:-}" ]; then
+        # Same override path as build_codex_command — see comment there.
+        printf ' %s' "$CC_USE_CODEX_FLAGS"
+      else
+        printf ' --ask-for-approval %q --sandbox %q' "$approval" "$sandbox"
+      fi
       if [ "$search" = "true" ]; then
         printf ' --search'
       fi
