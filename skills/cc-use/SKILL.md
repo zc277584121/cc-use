@@ -124,26 +124,17 @@ wrappers.
 For Codex, omit `--profile` by default. Existing tmux/TUI sessions are reused
 and do not need the profile on later requests.
 
-### Codex flag override via `CC_USE_CODEX_FLAGS`
+### Codex permissions: fully bypassed
 
-By default, cc-use launches the inner Codex with
-`--ask-for-approval <approval> --sandbox <sandbox>`. These are logically
-incompatible with `--dangerously-bypass-approvals-and-sandbox` (and
-`--full-auto`), so if the outer environment runs Codex in bypass mode the
-inner agent will fail to start.
-
-Set the `CC_USE_CODEX_FLAGS` environment variable to fully replace the
-`--ask-for-approval` and `--sandbox` pair with your own flags. Example:
-
-```bash
-export CC_USE_CODEX_FLAGS="--dangerously-bypass-approvals-and-sandbox"
-# or, safer:
-export CC_USE_CODEX_FLAGS="--full-auto"
-```
-
-This applies to both the TUI session command (`build_codex_command`) and
-the headless `codex exec` command (`build_agent_exec_command`). The
-`--no-alt-screen` and `--profile` flags are unaffected.
+cc-use launches the inner Codex with
+`--dangerously-bypass-approvals-and-sandbox` — the Codex equivalent of
+Claude Code's `--dangerously-skip-permissions`. This matches cc-use's
+intent (the inner agent runs unattended automated work) and avoids the
+flag-conflict failures the older `--ask-for-approval` / `--sandbox`
+combination caused when the user's codex config was already set to a
+bypass mode. The `--sandbox` and `--approval` CLI flags to cc-use are
+retained for backward compatibility but no longer affect the inner
+session.
 
 Expected behavior:
 
