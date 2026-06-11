@@ -265,6 +265,30 @@ explicitly asks for a persistent local cron or heartbeat workflow.
 For the full workflow, command examples, migration notes, and troubleshooting,
 read `references/schedules.md`.
 
+### TUI / tmux recording to GIF
+
+cc-use can also help record an inner TUI session (Claude Code, Codex CLI, or
+any ratatui-like app running in tmux) to a small animated GIF — useful for
+README headers, blog posts, and docs.
+
+The recording pipeline is `asciinema` → `agg` → `gifsicle`, plus optional
+post-processing (cropping the tmux status bar and adding window chrome) with
+Pillow.
+
+Use this only when the user explicitly asks to record a TUI session or
+produce a GIF demo. Key constraints:
+
+- Probe dependencies and ask the user before installing anything.
+- Always keep the intermediate `.cast` file — it is the canonical source and
+  the user may want to re-render later.
+- Produce a small slate of GIF variants (different font sizes) rather than one
+  fixed spec; let the user choose.
+- Bottom-cropping the tmux status bar / shell footer is a per-recording
+  judgment call. Inspect a busy frame; do not freeze the heuristic into code.
+
+For the full pipeline, principles, and pseudocode for the cropping decision,
+read `references/tui-recording.md`.
+
 ## Monitoring Model
 
 `delegate` and `monitor` use adaptive observation:
