@@ -111,7 +111,10 @@ hash_text() {
 }
 
 normalize_screen() {
-  sed -E $'s/\x1b\\[[0-?]*[ -\\/]*[@-~]//g; s/[[:space:]]+$//'
+  # LC_ALL=C: under some locales (e.g. LC_CTYPE=en_US.UTF-8), GNU sed applies
+  # locale-aware collation to bracket ranges like [0-?], which can reject an
+  # otherwise-valid ASCII range with "Invalid range end". Force byte order.
+  LC_ALL=C sed -E $'s/\x1b\\[[0-?]*[ -\\/]*[@-~]//g; s/[[:space:]]+$//'
 }
 
 tmux_has_session() {
