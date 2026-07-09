@@ -101,7 +101,12 @@ Important details:
   PTY defaults to 80×24. To record at a specific size, ask the user to run the
   pipeline from their interactive terminal at the desired window size, or use
   `tmux set-option -t <session> window-size manual; tmux resize-window
-  -t <session> -x W -y H` before starting the recording.
+  -t <session> -x W -y H` before starting the recording. Always scope
+  `-t <session>` to the recording session — never drop it or pass `-g`, or
+  every session on the server gets locked to a fixed size. Once the recording
+  finishes, restore auto-resize on that session with `tmux set-option
+  -t <session> window-size latest`, otherwise the session stays pinned to the
+  recording dimensions even after the client detaches.
 
 ## Always keep the .cast file
 
