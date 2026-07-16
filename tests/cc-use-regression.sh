@@ -85,6 +85,9 @@ case "\$mode:\$1" in
       exit 2
     fi
     ;;
+  duplicate-flag:capture-pane)
+    printf "error: the argument '--dangerously-bypass-approvals-and-sandbox' cannot be used multiple times\n"
+    ;;
   unavailable:capture-pane)
     exit 1
     ;;
@@ -122,6 +125,24 @@ assert_not_contains "$codex_command" "--sandbox" "build_codex_command does not i
 
 codex_command="$(build_codex_command "zilliz" "workspace-write" "never")"
 assert_contains "$codex_command" "--profile zilliz" "profile still appended in bypass mode"
+
+codex_fallback="$(build_agent_fallback_command codex zilliz)"
+assert_contains "$codex_fallback" "--no-alt-screen" "codex fallback keeps tmux-friendly mode"
+assert_contains "$codex_fallback" "--profile zilliz" "codex fallback keeps explicit profile"
+assert_not_contains "$codex_fallback" "--dangerously-bypass-approvals-and-sandbox" "codex fallback drops bypass flag"
+assert_not_contains "$codex_fallback" "--ask-for-approval" "codex fallback drops approval flag"
+assert_not_contains "$codex_fallback" "--sandbox" "codex fallback drops sandbox flag"
+
+claude_fallback="$(build_agent_fallback_command claude "")"
+assert_eq "claude" "$claude_fallback" "claude fallback drops permission flags"
+
+stub_dir="$tmp_root/stub-duplicate-flag"
+write_tmux_stub "$stub_dir" duplicate-flag
+run_capture output status env PATH="$stub_dir:$PATH" bash -c '
+  source "$1"
+  agent_startup_flag_conflict_detected fake-session
+' _ "$SCRIPT"
+[ "$status" -eq 0 ] || fail "startup duplicate flag screen should be detected"
 
 screen_file="$tmp_root/screen.txt"
 printf 'Allow this command?\n' > "$screen_file"
@@ -232,8 +253,10 @@ assert_contains "$(jq -c '.schedules[0]' "$schedule_home/.cc-use/schedules.json"
 assert_contains "$(jq -c '.schedules[0]' "$schedule_home/.cc-use/schedules.json")" '"profile":"zilliz"' "cron schedule stores profile"
 assert_contains "$(jq -c '.schedules[0]' "$schedule_home/.cc-use/schedules.json")" '"search":true' "cron schedule stores search flag"
 assert_contains "$(jq -c '.schedules[0]' "$schedule_home/.cc-use/schedules.json")" '"sandbox":"danger-full-access"' "cron schedule defaults to broad sandbox"
-[ -f "$schedule_home/Library/LaunchAgents/com.cc-use.${cron_id}.plist" ] || fail "schedule-add cron writes launchd plist"
-assert_contains "$(plutil -p "$schedule_home/Library/LaunchAgents/com.cc-use.${cron_id}.plist")" "schedule-run" "cron plist calls unified runner"
+if [ "$(uname -s)" = "Darwin" ]; then
+  [ -f "$schedule_home/Library/LaunchAgents/com.cc-use.${cron_id}.plist" ] || fail "schedule-add cron writes launchd plist"
+  assert_contains "$(plutil -p "$schedule_home/Library/LaunchAgents/com.cc-use.${cron_id}.plist")" "schedule-run" "cron plist calls unified runner"
+fi
 
 run_capture output status env HOME="$schedule_home" PATH="$stub_dir:$PATH" "$SCRIPT" schedule-add heartbeat news --project "$project" --interval-minutes 15 --agent codex --profile zilliz --session hb-news
 [ "$status" -eq 0 ] || fail "schedule-add heartbeat should exit 0"
@@ -247,7 +270,7 @@ assert_contains "$output" "zilliz" "schedule-list includes profile"
 
 run_capture output status env HOME="$schedule_home" PATH="$stub_dir:$PATH" "$SCRIPT" schedule-run "$cron_id"
 [ "$status" -eq 0 ] || fail "schedule-run cron should exit 0"
-assert_contains "$(cat "$schedule_home/.cc-use/logs/cron-${cron_id}.log")" "codex args: <--profile> <zilliz> <--ask-for-approval> <never> <--sandbox> <danger-full-access> <--search> <exec> <--skip-git-repo-check>" "schedule-run cron uses stored global options"
+assert_contains "$(cat "$schedule_home/.cc-use/logs/cron-${cron_id}.log")" "codex args: <--profile> <zilliz> <--dangerously-bypass-approvals-and-sandbox> <--search> <exec> <--skip-git-repo-check>" "schedule-run cron uses stored global options"
 assert_contains "$(cat "$schedule_home/.cc-use/logs/cron-${cron_id}.log")" "<--search>" "schedule-run cron uses the stored search flag"
 
 echo "ok - cc-use regression tests passed"

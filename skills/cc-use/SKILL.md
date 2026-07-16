@@ -136,6 +136,12 @@ bypass mode. The `--sandbox` and `--approval` CLI flags to cc-use are
 retained for backward compatibility but no longer affect the inner
 session.
 
+If the user's shell already wraps `codex` or `claude` with equivalent broad
+permission flags (for example `alias codex="codex --yolo"`), startup may fail
+because the underlying CLI sees duplicate or conflicting arguments. In that
+case cc-use retries the startup once with a minimal agent command, preserving
+the profile and tmux-friendly mode while dropping cc-use's permission flags.
+
 Expected behavior:
 
 - If the session does not exist, the helper creates a persistent tmux session
