@@ -126,23 +126,20 @@ assert_not_contains "$codex_command" "--sandbox" "build_codex_command does not i
 codex_command="$(build_codex_command "zilliz" "workspace-write" "never")"
 assert_contains "$codex_command" "--profile zilliz" "profile still appended in bypass mode"
 
-codex_fallback="$(build_agent_fallback_command codex zilliz)"
+codex_fallback="$(build_codex_fallback_command zilliz)"
 assert_contains "$codex_fallback" "--no-alt-screen" "codex fallback keeps tmux-friendly mode"
 assert_contains "$codex_fallback" "--profile zilliz" "codex fallback keeps explicit profile"
 assert_not_contains "$codex_fallback" "--dangerously-bypass-approvals-and-sandbox" "codex fallback drops bypass flag"
 assert_not_contains "$codex_fallback" "--ask-for-approval" "codex fallback drops approval flag"
 assert_not_contains "$codex_fallback" "--sandbox" "codex fallback drops sandbox flag"
 
-claude_fallback="$(build_agent_fallback_command claude "")"
-assert_eq "claude" "$claude_fallback" "claude fallback drops permission flags"
-
 stub_dir="$tmp_root/stub-duplicate-flag"
 write_tmux_stub "$stub_dir" duplicate-flag
 run_capture output status env PATH="$stub_dir:$PATH" bash -c '
   source "$1"
-  agent_startup_flag_conflict_detected fake-session
+  codex_startup_flag_conflict_detected fake-session
 ' _ "$SCRIPT"
-[ "$status" -eq 0 ] || fail "startup duplicate flag screen should be detected"
+[ "$status" -eq 0 ] || fail "codex startup duplicate flag screen should be detected"
 
 screen_file="$tmp_root/screen.txt"
 printf 'Allow this command?\n' > "$screen_file"

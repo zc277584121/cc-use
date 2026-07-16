@@ -170,22 +170,12 @@ build_codex_command() {
   fi
 }
 
-build_agent_fallback_command() {
-  local agent="$1"
-  local profile="$2"
-  validate_agent "$agent"
-  case "$agent" in
-    codex)
-      printf '%q --no-alt-screen' "codex"
-      if [ -n "$profile" ]; then
-        printf ' --profile %q' "$profile"
-      fi
-      ;;
-    claude)
-      [ -z "$profile" ] || die "--profile is only supported for codex"
-      printf '%q' "claude"
-      ;;
-  esac
+build_codex_fallback_command() {
+  local profile="$1"
+  printf '%q --no-alt-screen' "codex"
+  if [ -n "$profile" ]; then
+    printf ' --profile %q' "$profile"
+  fi
 }
 
 resolve_codex_binary() {
@@ -248,7 +238,7 @@ launch_agent_session() {
   tmux send-keys -t "$session" "$command" Enter
 }
 
-agent_startup_flag_conflict_detected() {
+codex_startup_flag_conflict_detected() {
   local session="$1"
   local screen
   screen="$(tmux_capture_scrollback "$session" -200 - 2>/dev/null || true)"
@@ -463,12 +453,12 @@ cmd_delegate() {
     launch_agent_session "$session" "$project" "$command"
     echo "launched $session: $command"
     sleep 5
-    if agent_startup_flag_conflict_detected "$session"; then
+    if [ "$agent" = "codex" ] && codex_startup_flag_conflict_detected "$session"; then
       local fallback_command
-      fallback_command="$(build_agent_fallback_command "$agent" "$profile")"
+      fallback_command="$(build_codex_fallback_command "$profile")"
       tmux kill-session -t "$session" >/dev/null 2>&1 || true
       launch_agent_session "$session" "$project" "$fallback_command"
-      echo "relaunched $session after startup flag conflict: $fallback_command"
+      echo "relaunched $session after Codex startup flag conflict: $fallback_command"
       sleep 5
     fi
     tmux send-keys -t "$session" Enter
