@@ -136,11 +136,11 @@ bypass mode. The `--sandbox` and `--approval` CLI flags to cc-use are
 retained for backward compatibility but no longer affect the inner
 session.
 
-If the user's shell already wraps `codex` with equivalent broad permission
-flags (for example `alias codex="codex --yolo"`), startup may fail because
-Codex sees duplicate or conflicting arguments. In that case cc-use retries the
-Codex startup once with a minimal command, preserving the profile and
-tmux-friendly mode while dropping cc-use's Codex permission flag.
+The agent is still started from the pane's interactive shell so local startup
+files can populate `PATH`, API keys, and other environment settings. cc-use
+prefixes the launch with the shell builtin `command`, so aliases and shell
+functions such as `alias codex="codex --yolo"` or wrapper functions around
+`claude` are bypassed without dropping cc-use's intended startup flags.
 
 Expected behavior:
 

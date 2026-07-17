@@ -85,9 +85,6 @@ case "\$mode:\$1" in
       exit 2
     fi
     ;;
-  duplicate-flag:capture-pane)
-    printf "error: the argument '--dangerously-bypass-approvals-and-sandbox' cannot be used multiple times\n"
-    ;;
   unavailable:capture-pane)
     exit 1
     ;;
@@ -110,6 +107,7 @@ prompt="$(build_inner_task_prompt $'first line\nsecond line')"
 assert_eq $'first line\nsecond line' "$prompt" "build_inner_task_prompt passes text through unchanged"
 
 codex_command="$(build_codex_command "" "workspace-write" "never")"
+assert_contains "$codex_command" "command codex" "build_codex_command bypasses shell aliases and functions"
 assert_contains "$codex_command" "--no-alt-screen" "build_codex_command includes stable tmux-friendly mode"
 assert_not_contains "$codex_command" "--profile" "build_codex_command omits profile by default"
 
@@ -126,20 +124,9 @@ assert_not_contains "$codex_command" "--sandbox" "build_codex_command does not i
 codex_command="$(build_codex_command "zilliz" "workspace-write" "never")"
 assert_contains "$codex_command" "--profile zilliz" "profile still appended in bypass mode"
 
-codex_fallback="$(build_codex_fallback_command zilliz)"
-assert_contains "$codex_fallback" "--no-alt-screen" "codex fallback keeps tmux-friendly mode"
-assert_contains "$codex_fallback" "--profile zilliz" "codex fallback keeps explicit profile"
-assert_not_contains "$codex_fallback" "--dangerously-bypass-approvals-and-sandbox" "codex fallback drops bypass flag"
-assert_not_contains "$codex_fallback" "--ask-for-approval" "codex fallback drops approval flag"
-assert_not_contains "$codex_fallback" "--sandbox" "codex fallback drops sandbox flag"
-
-stub_dir="$tmp_root/stub-duplicate-flag"
-write_tmux_stub "$stub_dir" duplicate-flag
-run_capture output status env PATH="$stub_dir:$PATH" bash -c '
-  source "$1"
-  codex_startup_flag_conflict_detected fake-session
-' _ "$SCRIPT"
-[ "$status" -eq 0 ] || fail "codex startup duplicate flag screen should be detected"
+claude_command="$(build_agent_command claude "" workspace-write never)"
+assert_contains "$claude_command" "command claude" "build_agent_command bypasses shell aliases and functions for Claude"
+assert_contains "$claude_command" "--dangerously-skip-permissions" "build_agent_command keeps Claude permissions bypass"
 
 screen_file="$tmp_root/screen.txt"
 printf 'Allow this command?\n' > "$screen_file"
@@ -178,12 +165,12 @@ chmod +x "$stub_dir/tmux"
 launch_log="$tmp_root/launch.log"
 run_capture output status env PATH="$stub_dir:$PATH" CC_USE_TMUX_LOG="$launch_log" bash -c '
   source "$1"
-  launch_agent_session test-session /tmp/project "codex --profile zilliz"
+  launch_agent_session test-session /tmp/project "command codex --profile zilliz"
 ' _ "$SCRIPT"
 [ "$status" -eq 0 ] || fail "launch_agent_session with tmux stub should exit 0"
 launch_output="$(cat "$launch_log")"
 assert_contains "$launch_output" "new-session -d -s test-session -c /tmp/project" "launch_agent_session starts an interactive shell in the project"
-assert_contains "$launch_output" "send-keys -t test-session codex --profile zilliz Enter" "launch_agent_session starts the agent via shell input"
+assert_contains "$launch_output" "send-keys -t test-session command codex --profile zilliz Enter" "launch_agent_session starts the agent via shell input"
 assert_not_contains "$launch_output" "bash -lc" "launch_agent_session does not bypass shell startup files"
 
 stub_dir="$tmp_root/stub-scrollback"
