@@ -76,12 +76,15 @@ You should then:
 
 1. Start or reuse an inner CC session for the same agent family as the outer
    session.
-2. Break the user's request into short, focused inner requests.
-3. Send each inner request exactly as written, without wrapper text.
-4. Monitor by screen stability, not by parsing agent-specific UI rules.
-5. When the screen stays quiet long enough, inspect the saved screen snapshot
+2. When the inner session is newly created or replaced, treat startup readiness
+   as its own supervision step. Inspect the first stable screen semantically and
+   confirm the TUI is usable before sending follow-up work.
+3. Break the user's request into short, focused inner requests.
+4. Send each inner request exactly as written, without wrapper text.
+5. Monitor by screen stability, not by parsing agent-specific UI rules.
+6. When the screen stays quiet long enough, inspect the saved screen snapshot
    semantically and decide whether to wait, steer, or verify.
-6. Run final acceptance checks yourself from the outer session.
+7. Run final acceptance checks yourself from the outer session.
 
 ## Commands
 
@@ -124,6 +127,20 @@ wrappers.
 For Codex, omit `--profile` by default. Existing tmux/TUI sessions are reused
 and do not need the profile on later requests.
 
+Fresh-session readiness:
+
+- If you use `--replace`, choose a deliberately small first request when
+  practical, then inspect the returned `screen_path` before sending more work.
+- Treat tmux/session creation as proof that a pane exists, not proof that the
+  agent is ready. The first stable screen may still show a startup prompt,
+  update notice, auth/permission question, shell error, crashed process, or
+  another blocked state.
+- Judge readiness semantically from the screen. Do not turn this into
+  agent-specific keyword matching in the skill text or in normal supervision.
+- If readiness is unclear, wait and `monitor`, inspect `scrollback`, resolve the
+  prompt, restart with `--replace`, or report the blocker. Do not keep sending
+  task text into an uncertain TUI state.
+
 ### Codex permissions: fully bypassed
 
 cc-use launches the inner Codex with
@@ -141,6 +158,17 @@ files can populate `PATH`, API keys, and other environment settings. cc-use
 prefixes the launch with the shell builtin `command`, so aliases and shell
 functions such as `alias codex="codex --yolo"` or wrapper functions around
 `claude` are bypassed without dropping cc-use's intended startup flags.
+
+Keep two startup concerns separate:
+
+- Alias/function bypass: the launch should avoid user shell wrappers that add
+  duplicate or conflicting flags.
+- Path and environment source: bypassing wrappers does not prove the executable
+  is available in every context. Cron jobs, scheduled runs, and nested tmux
+  sessions may have a thinner `PATH` than the outer interactive shell. Verify
+  command resolution in the same execution context or use an explicit, intended
+  environment override instead of adding host-specific fallback paths to the
+  generic skill.
 
 Expected behavior:
 
