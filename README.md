@@ -175,16 +175,19 @@ sequenceDiagram
     end
 ```
 
-The tmux session and the interactive inner TUI are the source of truth. Session
-names use the compact `ccu-<project-name>` form, for example `ccu-my-project`.
-If the session already exists, cc-use reuses it; otherwise it creates a new
-persistent TUI.
+The tmux session and the interactive inner TUI are the source of truth. Without
+an explicit name, sessions use the compact `ccu-<project-name>` form, for
+example `ccu-my-project`. Callers may provide their own session name when they
+need an independent execution. Names use letters, numbers, underscores, and
+hyphens. Session names are exact identifiers, and different named sessions can
+run in parallel. Input and observation updates are serialized within one
+session.
 
 The inner session is intentionally persistent. The outer agent should leave it
 running after routine task completion so later work can continue in the same
-project context, even across separate outer conversations or later days. Close
-it only when the user explicitly asks, or when the session is broken and a fresh
-one is required.
+project context, even across separate outer conversations or later days. A
+caller that creates its own named session may close it when that caller's work
+is complete.
 
 ## Monitoring Model
 
@@ -461,8 +464,8 @@ skills/cc-use/scripts/cc-use snapshot <session>
 skills/cc-use/scripts/cc-use kill <session>
 ```
 
-`kill` is for explicit cleanup or recovery. It is not part of the normal
-completion flow.
+`kill` closes exactly the named session. Use it for explicit cleanup, recovery,
+or the end of a caller-owned named-session lifecycle.
 
 ## Local Verification
 

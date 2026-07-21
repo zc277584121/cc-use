@@ -97,6 +97,13 @@ the `.cc-use/state/` location. If omitted, it defaults to the current directory.
 Passing `--project "$PWD"` is recommended when the outer session may change
 directories.
 
+Session names use letters, numbers, underscores, and hyphens. They are exact
+identifiers: `work` is distinct from `work-review`, and every operation targets
+only the requested name. Operations that send input or update observation state
+are serialized per session; if another supervisor is already operating on that
+session, cc-use reports it as busy. Different named sessions can run in
+parallel.
+
 ### `delegate`
 
 Start or reuse the inner session, send one short request exactly as provided,
@@ -117,8 +124,8 @@ Important options:
   an observation is emitted. Default is `30`.
 - `--poll-interval N`: seconds between screen captures while waiting. Default
   is `2`.
-- `--replace`: kill and recreate an existing session. Use only for recovery or
-  an explicit fresh-start decision.
+- `--replace`: kill and recreate an existing session. Use it for explicit
+  recovery of that named session.
 
 `TASK_TEXT` is passed through unchanged. Keep task decomposition in the outer
 session. Do not ask the helper to add role instructions, policy text, or task
@@ -127,10 +134,11 @@ wrappers.
 For Codex, omit `--profile` by default. Existing tmux/TUI sessions are reused
 and do not need the profile on later requests.
 
-Fresh-session readiness:
+New-session readiness:
 
-- If you use `--replace`, choose a deliberately small first request when
-  practical, then inspect the returned `screen_path` before sending more work.
+- When a session is newly created, choose a deliberately small first request
+  when practical, then inspect the returned `screen_path` before sending more
+  work.
 - Treat tmux/session creation as proof that a pane exists, not proof that the
   agent is ready. The first stable screen may still show a startup prompt,
   update notice, auth/permission question, shell error, crashed process, or
@@ -138,31 +146,25 @@ Fresh-session readiness:
 - Judge readiness semantically from the screen. Do not turn this into
   agent-specific keyword matching in the skill text or in normal supervision.
 - If readiness is unclear, wait and `monitor`, inspect `scrollback`, resolve the
-  prompt, restart with `--replace`, or report the blocker. Do not keep sending
+  prompt, restart the named session, or report the blocker. Do not keep sending
   task text into an uncertain TUI state.
 
-### Codex permissions: fully bypassed
+### Agent startup
 
 cc-use launches the inner Codex with
-`--dangerously-bypass-approvals-and-sandbox` — the Codex equivalent of
-Claude Code's `--dangerously-skip-permissions`. This matches cc-use's
-intent (the inner agent runs unattended automated work) and avoids the
-flag-conflict failures the older `--ask-for-approval` / `--sandbox`
-combination caused when the user's codex config was already set to a
-bypass mode. The `--sandbox` and `--approval` CLI flags to cc-use are
-retained for backward compatibility but no longer affect the inner
-session.
+`--dangerously-bypass-approvals-and-sandbox` and launches the inner Claude Code
+with `--dangerously-skip-permissions`. Inner sessions are unattended and have
+the same broad access expectations for both agent families.
 
-The agent is still started from the pane's interactive shell so local startup
-files can populate `PATH`, API keys, and other environment settings. cc-use
-prefixes the launch with the shell builtin `command`, so aliases and shell
-functions such as `alias codex="codex --yolo"` or wrapper functions around
-`claude` are bypassed without dropping cc-use's intended startup flags.
+The agent starts from the pane's interactive shell so local startup files can
+populate `PATH`, API keys, and other environment settings. cc-use prefixes the
+launch with the shell builtin `command`, making startup independent of aliases
+and shell functions while retaining the interactive shell environment.
 
 Keep two startup concerns separate:
 
-- Alias/function bypass: the launch should avoid user shell wrappers that add
-  duplicate or conflicting flags.
+- Command resolution: the launch uses the shell's `PATH` without applying
+  aliases or functions.
 - Path and environment source: bypassing wrappers does not prove the executable
   is available in every context. Cron jobs, scheduled runs, and nested tmux
   sessions may have a thinner `PATH` than the outer interactive shell. Verify
@@ -275,14 +277,15 @@ These exist for diagnostics and recovery:
 ```
 
 Use `kill` only when the user explicitly asks to close the inner session, or
-when the session is broken and a fresh session is required.
+when the caller has finished with a deliberately short-lived named session.
 
 Keep the inner session running by default. A long-running project may span
 multiple outer conversations or calendar days, and the existing tmux/TUI session
 preserves useful continuity for later work.
 
-Only stop the inner session if the user explicitly asks you to close it, or if
-the session is broken and you have decided a fresh session is required.
+Only stop the default project session when the user asks. A caller that creates
+its own named session may define a shorter lifecycle and close it after its work
+has been accepted or rejected.
 
 ### Scheduled tasks
 
@@ -389,8 +392,8 @@ work matches the user's request.
 
 - Do not expose tmux/session/state details unless the user asks.
 - Do not pass or synthesize environment variables for the inner session.
-- Do not kill the inner session at routine task completion; leave it available
-  for future delegated work.
+- Keep the default project session available for future delegated work. Follow
+  the caller's lifecycle for explicitly named sessions.
 - Do not rely on the inner screen as proof of success; verify externally.
 - Do not use `scrollback` as a persistent transcript. It is a temporary tmux
   history read.

@@ -60,6 +60,62 @@ session_name_for_project() {
   printf 'ccu-%s' "$(safe_name "$(basename "$project_dir")")"
 }
 
+validate_session_name() {
+  local session="$1"
+  [ -n "$session" ] || die "session name must not be empty"
+  [ "$session" = "$(safe_name "$session")" ] || die "session name may contain only letters, numbers, underscores, and hyphens"
+}
+
+tmux_session_target() {
+  printf '=%s' "$1"
+}
+
+tmux_pane_target() {
+  printf '=%s:' "$1"
+}
+
+session_lock_root() {
+  printf '%s' "${CC_USE_LOCK_ROOT:-$HOME/.cc-use/locks}"
+}
+
+session_lock_dir() {
+  local session="$1"
+  printf '%s/%s.lock' "$(session_lock_root)" "$session"
+}
+
+SESSION_LOCK_DIR=""
+
+release_session_lock() {
+  [ -n "$SESSION_LOCK_DIR" ] || return 0
+  if [ -f "$SESSION_LOCK_DIR/pid" ] && [ "$(cat "$SESSION_LOCK_DIR/pid" 2>/dev/null || true)" = "$$" ]; then
+    rm -f "$SESSION_LOCK_DIR/pid"
+    rmdir "$SESSION_LOCK_DIR" 2>/dev/null || true
+  fi
+  SESSION_LOCK_DIR=""
+}
+
+acquire_session_lock() {
+  local session="$1"
+  local lock_dir
+  local owner_pid=""
+  lock_dir="$(session_lock_dir "$session")"
+  mkdir -p "$(dirname "$lock_dir")"
+
+  if ! mkdir "$lock_dir" 2>/dev/null; then
+    [ -f "$lock_dir/pid" ] && owner_pid="$(cat "$lock_dir/pid" 2>/dev/null || true)"
+    if [ -z "$owner_pid" ] || ! kill -0 "$owner_pid" 2>/dev/null; then
+      rm -rf "$lock_dir"
+      mkdir "$lock_dir" 2>/dev/null || die "session is busy: $session"
+    else
+      die "session is busy: $session"
+    fi
+  fi
+
+  printf '%s\n' "$$" > "$lock_dir/pid"
+  SESSION_LOCK_DIR="$lock_dir"
+  trap release_session_lock EXIT
+}
+
 validate_agent() {
   case "$1" in
     codex|claude) ;;
@@ -118,18 +174,18 @@ normalize_screen() {
 }
 
 tmux_has_session() {
-  tmux has-session -t "$1" >/dev/null 2>&1
+  tmux has-session -t "$(tmux_session_target "$1")" >/dev/null 2>&1
 }
 
 tmux_capture() {
-  tmux capture-pane -t "$1" -p 2>/dev/null | normalize_screen
+  tmux capture-pane -t "$(tmux_pane_target "$1")" -p 2>/dev/null | normalize_screen
 }
 
 tmux_capture_scrollback() {
   local session="$1"
   local start="$2"
   local end="$3"
-  tmux capture-pane -t "$session" -p -S "$start" -E "$end" 2>/dev/null | normalize_screen
+  tmux capture-pane -t "$(tmux_pane_target "$session")" -p -S "$start" -E "$end" 2>/dev/null | normalize_screen
 }
 
 tmux_send_text() {
@@ -137,19 +193,21 @@ tmux_send_text() {
   local text="$2"
   local tmp
   local buffer
+  local pane_target
   tmp="$(mktemp)"
   buffer="cc-use-send-$$"
+  pane_target="$(tmux_pane_target "$session")"
   printf '%s' "$text" > "$tmp"
-  tmux send-keys -t "$session" C-u
+  tmux send-keys -t "$pane_target" C-u
   tmux load-buffer -b "$buffer" "$tmp"
-  tmux paste-buffer -d -b "$buffer" -t "$session"
+  tmux paste-buffer -d -b "$buffer" -t "$pane_target"
   rm -f "$tmp"
   sleep 0.5
-  tmux send-keys -t "$session" Enter
+  tmux send-keys -t "$pane_target" Enter
   sleep 0.7
-  tmux send-keys -t "$session" C-m
+  tmux send-keys -t "$pane_target" C-m
   sleep 0.7
-  tmux send-keys -t "$session" Enter
+  tmux send-keys -t "$pane_target" Enter
 }
 
 build_inner_task_prompt() {
@@ -158,15 +216,9 @@ build_inner_task_prompt() {
 
 build_codex_command() {
   local profile="$1"
-  # sandbox/approval positional args retained for caller compatibility
-  # but unused. cc-use launches the inner codex fully bypassed (matches
-  # Claude Code's --dangerously-skip-permissions risk level); the older
-  # --ask-for-approval / --sandbox pair was incompatible with codex
-  # configs already set to bypass mode and caused inner-session startup
-  # failures.
-  # Launch through the shell so startup files can populate PATH and keys, but
-  # use the shell builtin `command` to bypass user aliases/functions such as
-  # `alias codex="codex --yolo"` that would duplicate startup flags.
+  # Interactive Codex sessions run unattended with full access. Start from the
+  # interactive shell so startup files populate PATH and keys, and use
+  # `command` so the launch is independent of aliases and functions.
   printf 'command %q --no-alt-screen --dangerously-bypass-approvals-and-sandbox' "codex"
   if [ -n "$profile" ]; then
     printf ' --profile %q' "$profile"
@@ -223,14 +275,18 @@ launch_agent_session() {
   local session="$1"
   local project="$2"
   local command="$3"
+  local session_target
+  local pane_target
+  session_target="$(tmux_session_target "$session")"
+  pane_target="$(tmux_pane_target "$session")"
 
   tmux new-session -d -s "$session" -c "$project"
-  tmux set-option -t "$session" history-limit 50000 >/dev/null 2>&1 || true
+  tmux set-option -t "$session_target" history-limit 50000 >/dev/null 2>&1 || true
 
   # Start the agent from the pane's interactive shell so user shell startup files
   # can populate PATH, provider keys, and other local environment settings.
   sleep 1
-  tmux send-keys -t "$session" "$command" Enter
+  tmux send-keys -t "$pane_target" "$command" Enter
 }
 
 build_agent_exec_command() {
@@ -247,7 +303,6 @@ build_agent_exec_command() {
       if [ -n "$profile" ]; then
         printf ' --profile %q' "$profile"
       fi
-      # Same simplification as build_codex_command — see comment there.
       printf ' --dangerously-bypass-approvals-and-sandbox'
       if [ "$search" = "true" ]; then
         printf ' --search'
@@ -270,15 +325,19 @@ write_watch_state() {
   local observations="$6"
   local last_observation_json="${7:-null}"
   local state
+  local env_tmp
+  local json_tmp
   state="$(watch_dir "$project_dir" "$session")"
   mkdir -p "$state"
-  cat > "$state/watch.env" <<EOF
+  env_tmp="$(mktemp "$state/watch.env.XXXXXX")"
+  json_tmp="$(mktemp "$state/watch.json.XXXXXX")"
+  cat > "$env_tmp" <<EOF
 last_digest=$(printf '%q' "$digest")
 silence_started_at=$silence_started
 next_check_at=$next_check
 observation_count=$observations
 EOF
-  cat > "$state/watch.json" <<EOF
+  cat > "$json_tmp" <<EOF
 {
   "last_digest": "$(printf '%s' "$digest" | json_escape)",
   "next_check_at": $next_check,
@@ -288,6 +347,8 @@ EOF
   "last_observation": $last_observation_json
 }
 EOF
+  mv "$env_tmp" "$state/watch.env"
+  mv "$json_tmp" "$state/watch.json"
 }
 
 load_watch_state() {
@@ -420,9 +481,11 @@ cmd_delegate() {
   project="$(project_abs "$project")"
   validate_agent "$agent"
   [ -n "$session" ] || session="$(session_name_for_project "$project" "$agent")"
+  validate_session_name "$session"
+  acquire_session_lock "$session"
 
   if $replace && tmux_has_session "$session"; then
-    tmux kill-session -t "$session" >/dev/null 2>&1 || true
+    tmux kill-session -t "$(tmux_session_target "$session")" >/dev/null 2>&1 || true
   fi
 
   if ! tmux_has_session "$session"; then
@@ -431,12 +494,14 @@ cmd_delegate() {
     launch_agent_session "$session" "$project" "$command"
     echo "launched $session: $command"
     sleep 5
-    tmux send-keys -t "$session" Enter
+    tmux send-keys -t "$(tmux_pane_target "$session")" Enter
     sleep 1
   fi
 
   tmux_send_text "$session" "$(build_inner_task_prompt "$task")"
   watch_once "$project" "$session" "$initial_quiet" "$poll_interval" "$max_observations"
+  release_session_lock
+  trap - EXIT
 }
 
 cmd_monitor() {
@@ -460,7 +525,11 @@ cmd_monitor() {
   project="$(project_abs "$project")"
   validate_agent "$agent"
   [ -n "$session" ] || session="$(session_name_for_project "$project" "$agent")"
+  validate_session_name "$session"
+  acquire_session_lock "$session"
   watch_once "$project" "$session" "$initial_quiet" "$poll_interval" "$max_observations"
+  release_session_lock
+  trap - EXIT
 }
 
 cmd_scrollback() {
@@ -493,6 +562,7 @@ cmd_scrollback() {
   project="$(project_abs "$project")"
   validate_agent "$agent"
   [ -n "$session" ] || session="$(session_name_for_project "$project" "$agent")"
+  validate_session_name "$session"
   tmux_capture_scrollback "$session" "$start" "$end"
 }
 
@@ -513,6 +583,7 @@ cmd_project_status() {
   project="$(project_abs "$project")"
   validate_agent "$agent"
   [ -n "$session" ] || session="$(session_name_for_project "$project" "$agent")"
+  validate_session_name "$session"
   load_watch_state "$project" "$session"
   local now silence remaining available
   now="$(now_epoch)"
@@ -870,6 +941,7 @@ cmd_schedule_add_heartbeat() {
   agent="$(resolve_agent "$agent")"
   validate_agent "$agent"
   [ -n "$session" ] || session="$(session_name_for_project "$project")"
+  validate_session_name "$session"
   case "$interval" in ''|*[!0-9]*) die "--interval-minutes must be a positive integer" ;; esac
   [ "$interval" -gt 0 ] || die "--interval-minutes must be a positive integer"
   schedule_init
@@ -1060,6 +1132,7 @@ schedule_run_heartbeat() {
   source_user_shell_profile
   [ -n "$env_path" ] && export PATH="$env_path"
   [ -n "$session" ] || session="$(session_name_for_project "$project")"
+  validate_session_name "$session"
   log_file="$(schedule_log_dir)/heartbeat-${id}.log"
   state_file="$(heartbeat_state_file "$project")"
   log_rotate "$log_file"
@@ -1128,11 +1201,13 @@ main() {
       ;;
     snapshot)
       [ "$#" -eq 1 ] || die "snapshot requires SESSION"
+      validate_session_name "$1"
       tmux_capture "$1"
       ;;
     kill)
       [ "$#" -eq 1 ] || die "kill requires SESSION"
-      tmux kill-session -t "$1" >/dev/null 2>&1 || true
+      validate_session_name "$1"
+      tmux kill-session -t "$(tmux_session_target "$1")" >/dev/null 2>&1 || true
       ;;
     list)
       tmux list-sessions -F "#{session_name}" 2>/dev/null || true

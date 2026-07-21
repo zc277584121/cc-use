@@ -102,27 +102,17 @@ source "$SCRIPT"
 
 assert_eq "abc-DEF-ghi" "$(safe_name "abc DEF/ghi")" "safe_name normalizes unsafe characters"
 assert_eq "ccu-example-project" "$(session_name_for_project "/tmp/example project")" "session_name_for_project uses compact safe basename"
+assert_eq "=example" "$(tmux_session_target "example")" "tmux_session_target forces exact session matching"
+assert_eq "=example:" "$(tmux_pane_target "example")" "tmux_pane_target forces exact pane matching"
 
 prompt="$(build_inner_task_prompt $'first line\nsecond line')"
 assert_eq $'first line\nsecond line' "$prompt" "build_inner_task_prompt passes text through unchanged"
 
 codex_command="$(build_codex_command "" "workspace-write" "never")"
-assert_contains "$codex_command" "command codex" "build_codex_command bypasses shell aliases and functions"
-assert_contains "$codex_command" "--no-alt-screen" "build_codex_command includes stable tmux-friendly mode"
-assert_not_contains "$codex_command" "--profile" "build_codex_command omits profile by default"
+assert_eq "command codex --no-alt-screen --dangerously-bypass-approvals-and-sandbox" "$codex_command" "build_codex_command uses the interactive Codex command"
 
 codex_command="$(build_codex_command "zilliz" "workspace-write" "never")"
-assert_contains "$codex_command" "--profile zilliz" "build_codex_command includes explicit profile only when requested"
-
-# cc-use uses --dangerously-bypass-approvals-and-sandbox unconditionally
-# (the old --ask-for-approval / --sandbox pair clashed with bypass-mode configs)
-codex_command="$(build_codex_command "" "workspace-write" "never")"
-assert_contains "$codex_command" "--dangerously-bypass-approvals-and-sandbox" "build_codex_command uses bypass mode"
-assert_not_contains "$codex_command" "--ask-for-approval" "build_codex_command does not include --ask-for-approval"
-assert_not_contains "$codex_command" "--sandbox" "build_codex_command does not include --sandbox"
-
-codex_command="$(build_codex_command "zilliz" "workspace-write" "never")"
-assert_contains "$codex_command" "--profile zilliz" "profile still appended in bypass mode"
+assert_eq "command codex --no-alt-screen --dangerously-bypass-approvals-and-sandbox --profile zilliz" "$codex_command" "build_codex_command appends an explicit profile"
 
 claude_command="$(build_agent_command claude "" workspace-write never)"
 assert_contains "$claude_command" "command claude" "build_agent_command bypasses shell aliases and functions for Claude"
@@ -141,6 +131,10 @@ assert_contains "$output" "Usage:" "missing command prints usage"
 run_capture output status "$SCRIPT" delegate
 [ "$status" -eq 1 ] || fail "delegate without task should exit 1"
 assert_contains "$output" "delegate requires TASK" "delegate without task reports a clear error"
+
+run_capture output status "$SCRIPT" snapshot 'invalid:name'
+[ "$status" -eq 1 ] || fail "invalid session name should exit 1"
+assert_contains "$output" "session name may contain only" "invalid session name reports the allowed character set"
 
 stub_dir="$tmp_root/stub-list"
 write_tmux_stub "$stub_dir" list
@@ -170,7 +164,8 @@ run_capture output status env PATH="$stub_dir:$PATH" CC_USE_TMUX_LOG="$launch_lo
 [ "$status" -eq 0 ] || fail "launch_agent_session with tmux stub should exit 0"
 launch_output="$(cat "$launch_log")"
 assert_contains "$launch_output" "new-session -d -s test-session -c /tmp/project" "launch_agent_session starts an interactive shell in the project"
-assert_contains "$launch_output" "send-keys -t test-session command codex --profile zilliz Enter" "launch_agent_session starts the agent via shell input"
+assert_contains "$launch_output" "set-option -t =test-session history-limit 50000" "launch_agent_session configures the exact session"
+assert_contains "$launch_output" "send-keys -t =test-session: command codex --profile zilliz Enter" "launch_agent_session starts the agent via the exact pane"
 assert_not_contains "$launch_output" "bash -lc" "launch_agent_session does not bypass shell startup files"
 
 stub_dir="$tmp_root/stub-scrollback"
@@ -191,13 +186,38 @@ assert_contains "$output" "--start must be '-' or an integer line number" "scrol
 
 project="$tmp_root/project"
 mkdir -p "$project"
+lock_root="$tmp_root/locks"
 stub_dir="$tmp_root/stub-unavailable"
 write_tmux_stub "$stub_dir" unavailable
-run_capture output status env PATH="$stub_dir:$PATH" "$SCRIPT" monitor --project "$project" --agent claude --initial-quiet-seconds 0 --poll-interval 1
+run_capture output status env PATH="$stub_dir:$PATH" CC_USE_LOCK_ROOT="$lock_root" "$SCRIPT" monitor --project "$project" --agent claude --initial-quiet-seconds 0 --poll-interval 1
 [ "$status" -eq 0 ] || fail "monitor unavailable session should exit 0"
 assert_contains "$output" '"event":"session_unavailable"' "monitor reports unavailable session as JSON"
 assert_contains "$output" '"session":"ccu-project"' "monitor includes derived session name"
 [ -f "$project/.cc-use/state/ccu-project/watch.observations.jsonl" ] || fail "monitor writes session-scoped observation history"
+[ ! -e "$lock_root/ccu-project.lock" ] || fail "monitor releases the session operation lock"
+
+busy_project="$tmp_root/busy-project-a"
+other_project="$tmp_root/busy-project-b"
+mkdir -p "$busy_project" "$other_project"
+busy_session="busy-session"
+busy_lock="$lock_root/$busy_session.lock"
+mkdir -p "$busy_lock"
+printf '%s\n' "$$" > "$busy_lock/pid"
+run_capture output status env PATH="$stub_dir:$PATH" CC_USE_LOCK_ROOT="$lock_root" "$SCRIPT" monitor --project "$other_project" --agent codex --session "$busy_session" --initial-quiet-seconds 0 --poll-interval 1
+[ "$status" -eq 1 ] || fail "monitor on a busy session should exit 1"
+assert_contains "$output" "session is busy: $busy_session" "the session lock applies across project paths"
+rm -rf "$busy_lock"
+
+stale_session="stale-session"
+stale_lock="$lock_root/$stale_session.lock"
+mkdir -p "$stale_lock"
+stale_pid=99999999
+kill -0 "$stale_pid" 2>/dev/null && fail "stale lock test requires a non-running PID"
+printf '%s\n' "$stale_pid" > "$stale_lock/pid"
+run_capture output status env PATH="$stub_dir:$PATH" CC_USE_LOCK_ROOT="$lock_root" "$SCRIPT" monitor --project "$busy_project" --agent codex --session "$stale_session" --initial-quiet-seconds 0 --poll-interval 1
+[ "$status" -eq 0 ] || fail "monitor should recover a stale session lock"
+assert_contains "$output" '"event":"session_unavailable"' "monitor continues after recovering a stale lock"
+[ ! -e "$stale_lock" ] || fail "monitor removes the recovered session lock"
 
 cat > "$project/.cc-use/state/ccu-project/watch.env" <<'EOF'
 last_digest=abc123
@@ -256,5 +276,31 @@ run_capture output status env HOME="$schedule_home" PATH="$stub_dir:$PATH" "$SCR
 [ "$status" -eq 0 ] || fail "schedule-run cron should exit 0"
 assert_contains "$(cat "$schedule_home/.cc-use/logs/cron-${cron_id}.log")" "codex args: <--profile> <zilliz> <--dangerously-bypass-approvals-and-sandbox> <--search> <exec> <--skip-git-repo-check>" "schedule-run cron uses stored global options"
 assert_contains "$(cat "$schedule_home/.cc-use/logs/cron-${cron_id}.log")" "<--search>" "schedule-run cron uses the stored search flag"
+
+if command -v tmux >/dev/null 2>&1; then
+  base="cc-use-target-check-$$"
+  sibling="${base}-sibling"
+  cleanup_tmux() {
+    tmux kill-session -t "=$base" >/dev/null 2>&1 || true
+    tmux kill-session -t "=$sibling" >/dev/null 2>&1 || true
+  }
+  cleanup_tmux
+  trap 'cleanup_tmux; cleanup' EXIT
+
+  tmux new-session -d -s "$sibling"
+  if tmux_has_session "$base"; then
+    fail "exact lookup matched a prefix sibling"
+  fi
+  "$SCRIPT" kill "$base"
+  tmux has-session -t "=$sibling" 2>/dev/null || fail "killing an absent exact session removed its prefix sibling"
+
+  tmux new-session -d -s "$base"
+  "$SCRIPT" kill "$base"
+  tmux has-session -t "=$base" 2>/dev/null && fail "kill left the exact target alive"
+  tmux has-session -t "=$sibling" 2>/dev/null || fail "kill removed a different named session"
+
+  cleanup_tmux
+  trap cleanup EXIT
+fi
 
 echo "ok - cc-use regression tests passed"
