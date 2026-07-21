@@ -143,6 +143,10 @@ New-session readiness:
   agent is ready. The first stable screen may still show a startup prompt,
   update notice, auth/permission question, shell error, crashed process, or
   another blocked state.
+- Do not accept or initiate agent, CLI, or skill updates from the inner TUI
+  unless the user explicitly requested that update. If an update prompt blocks
+  startup, dismiss or skip it only when that preserves the existing
+  environment, then inspect readiness again; otherwise report the blocker.
 - Judge readiness semantically from the screen. Do not turn this into
   agent-specific keyword matching in the skill text or in normal supervision.
 - If readiness is unclear, wait and `monitor`, inspect `scrollback`, resolve the
