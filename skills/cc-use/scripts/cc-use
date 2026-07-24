@@ -177,8 +177,37 @@ tmux_has_session() {
   tmux has-session -t "$(tmux_session_target "$1")" >/dev/null 2>&1
 }
 
+tmux_prepare_capture() {
+  local session="$1"
+  local geometry
+  local width
+  local height
+  local attached
+  local target_width
+  local target_height
+
+  geometry="$(tmux display-message -p -t "$(tmux_pane_target "$session")" '#{pane_width} #{pane_height} #{session_attached}' 2>/dev/null || true)"
+  read -r width height attached <<EOF
+$geometry
+EOF
+  case "$width" in ''|*[!0-9]*) return 0 ;; esac
+  case "$height" in ''|*[!0-9]*) return 0 ;; esac
+  [ "$attached" = "0" ] || return 0
+  if [ "$width" -ge 40 ] && [ "$height" -ge 12 ]; then
+    return 0
+  fi
+
+  target_width="$width"
+  target_height="$height"
+  [ "$target_width" -ge 160 ] || target_width=160
+  [ "$target_height" -ge 50 ] || target_height=50
+  tmux resize-window -t "$(tmux_session_target "$session")" -x "$target_width" -y "$target_height" >/dev/null 2>&1 || true
+}
+
 tmux_capture() {
-  tmux capture-pane -t "$(tmux_pane_target "$1")" -p 2>/dev/null | normalize_screen
+  local session="$1"
+  tmux_prepare_capture "$session"
+  tmux capture-pane -t "$(tmux_pane_target "$session")" -p 2>/dev/null | normalize_screen
 }
 
 tmux_capture_scrollback() {

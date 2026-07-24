@@ -149,6 +149,8 @@ New-session readiness:
   environment, then inspect readiness again; otherwise report the blocker.
 - Judge readiness semantically from the screen. Do not turn this into
   agent-specific keyword matching in the skill text or in normal supervision.
+- Treat a visibly truncated snapshot as incomplete evidence and inspect again
+  before concluding that the inner agent did not respond.
 - If readiness is unclear, wait and `monitor`, inspect `scrollback`, resolve the
   prompt, restart the named session, or report the blocker. Do not keep sending
   task text into an uncertain TUI state.
@@ -381,8 +383,8 @@ After an `inspect` observation:
 - If it shows a permission prompt, password prompt, yes/no question, or blocked
   input, intervene or ask the user.
 - If it shows an error, send one short corrective request or report the blocker.
-- If it is too narrow to understand, call `scrollback` once with enough lines or
-  an explicit range, then decide.
+- If it is too narrow to understand, monitor again and call `scrollback` once
+  with enough lines or an explicit range, then decide.
 
 If the screen is actively changing, `delegate` or `monitor` may not return for a
 while because the quiet timer keeps resetting. This is expected. The helper is

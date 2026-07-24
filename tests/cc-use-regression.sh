@@ -148,6 +148,39 @@ run_capture output status env PATH="$stub_dir:$PATH" "$SCRIPT" snapshot fake-ses
 [ "$status" -eq 0 ] || fail "snapshot with tmux stub should exit 0"
 assert_eq "red" "$output" "snapshot strips ANSI escapes and trailing spaces"
 
+stub_dir="$tmp_root/stub-geometry"
+mkdir -p "$stub_dir"
+cat > "$stub_dir/tmux" <<'EOF'
+#!/usr/bin/env bash
+case "$1" in
+  display-message)
+    printf '%s\n' "$CC_USE_TEST_GEOMETRY"
+    ;;
+  resize-window)
+    printf '%s\n' "$*" >> "$CC_USE_TMUX_LOG"
+    ;;
+  capture-pane)
+    printf 'screen\n'
+    ;;
+esac
+EOF
+chmod +x "$stub_dir/tmux"
+geometry_log="$tmp_root/geometry.log"
+: > "$geometry_log"
+run_capture output status env PATH="$stub_dir:$PATH" CC_USE_TEST_GEOMETRY="10 4 0" CC_USE_TMUX_LOG="$geometry_log" "$SCRIPT" snapshot tiny-session
+[ "$status" -eq 0 ] || fail "snapshot with a tiny detached pane should exit 0"
+assert_contains "$(cat "$geometry_log")" "resize-window -t =tiny-session -x 160 -y 50" "snapshot enlarges a tiny detached pane before capture"
+
+: > "$geometry_log"
+run_capture output status env PATH="$stub_dir:$PATH" CC_USE_TEST_GEOMETRY="10 4 1" CC_USE_TMUX_LOG="$geometry_log" "$SCRIPT" snapshot attached-session
+[ "$status" -eq 0 ] || fail "snapshot with a tiny attached pane should exit 0"
+assert_eq "" "$(cat "$geometry_log")" "snapshot does not resize an attached pane"
+
+: > "$geometry_log"
+run_capture output status env PATH="$stub_dir:$PATH" CC_USE_TEST_GEOMETRY="80 24 0" CC_USE_TMUX_LOG="$geometry_log" "$SCRIPT" snapshot normal-session
+[ "$status" -eq 0 ] || fail "snapshot with a normal detached pane should exit 0"
+assert_eq "" "$(cat "$geometry_log")" "snapshot keeps a usable detached pane unchanged"
+
 stub_dir="$tmp_root/stub-launch"
 mkdir -p "$stub_dir"
 cat > "$stub_dir/tmux" <<'EOF'
@@ -280,9 +313,11 @@ assert_contains "$(cat "$schedule_home/.cc-use/logs/cron-${cron_id}.log")" "<--s
 if command -v tmux >/dev/null 2>&1; then
   base="cc-use-target-check-$$"
   sibling="${base}-sibling"
+  tiny="${base}-tiny"
   cleanup_tmux() {
     tmux kill-session -t "=$base" >/dev/null 2>&1 || true
     tmux kill-session -t "=$sibling" >/dev/null 2>&1 || true
+    tmux kill-session -t "=$tiny" >/dev/null 2>&1 || true
   }
   cleanup_tmux
   trap 'cleanup_tmux; cleanup' EXIT
@@ -298,6 +333,11 @@ if command -v tmux >/dev/null 2>&1; then
   "$SCRIPT" kill "$base"
   tmux has-session -t "=$base" 2>/dev/null && fail "kill left the exact target alive"
   tmux has-session -t "=$sibling" 2>/dev/null || fail "kill removed a different named session"
+
+  tmux new-session -d -s "$tiny"
+  tmux resize-window -t "=$tiny" -x 10 -y 4
+  "$SCRIPT" snapshot "$tiny" >/dev/null
+  assert_eq "160x50" "$(tmux list-panes -t "=$tiny" -F '#{pane_width}x#{pane_height}')" "snapshot repairs a tiny detached tmux pane"
 
   cleanup_tmux
   trap cleanup EXIT
