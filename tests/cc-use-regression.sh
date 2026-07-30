@@ -111,6 +111,11 @@ assert_eq $'first line\nsecond line' "$prompt" "build_inner_task_prompt passes t
 codex_command="$(build_codex_command "" "workspace-write" "never")"
 assert_eq "command codex --no-alt-screen --dangerously-bypass-approvals-and-sandbox" "$codex_command" "build_codex_command uses the interactive Codex command"
 
+CODEX_FORCED_LOGIN_METHOD=api
+codex_command="$(build_codex_command "" "workspace-write" "never")"
+assert_eq 'command codex --no-alt-screen --dangerously-bypass-approvals-and-sandbox -c forced_login_method=\"api\"' "$codex_command" "build_codex_command can force API-key login for unattended TUI startup"
+unset CODEX_FORCED_LOGIN_METHOD
+
 codex_command="$(build_codex_command "zilliz" "workspace-write" "never")"
 assert_eq "command codex --no-alt-screen --dangerously-bypass-approvals-and-sandbox --profile zilliz" "$codex_command" "build_codex_command appends an explicit profile"
 

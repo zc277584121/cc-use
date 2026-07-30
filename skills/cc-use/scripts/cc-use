@@ -245,10 +245,18 @@ build_inner_task_prompt() {
 
 build_codex_command() {
   local profile="$1"
+  local forced_login_method="${CODEX_FORCED_LOGIN_METHOD:-}"
   # Interactive Codex sessions run unattended with full access. Start from the
   # interactive shell so startup files populate PATH and keys, and use
   # `command` so the launch is independent of aliases and functions.
   printf 'command %q --no-alt-screen --dangerously-bypass-approvals-and-sandbox' "codex"
+  case "$forced_login_method" in
+    "") ;;
+    api|chatgpt)
+      printf ' -c %q' "forced_login_method=\"$forced_login_method\""
+      ;;
+    *) die "unsupported CODEX_FORCED_LOGIN_METHOD: $forced_login_method" ;;
+  esac
   if [ -n "$profile" ]; then
     printf ' --profile %q' "$profile"
   fi

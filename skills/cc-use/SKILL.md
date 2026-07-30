@@ -162,6 +162,12 @@ cc-use launches the inner Codex with
 with `--dangerously-skip-permissions`. Inner sessions are unattended and have
 the same broad access expectations for both agent families.
 
+When an unattended Codex TUI must use a specific cached authentication mode,
+set `CODEX_FORCED_LOGIN_METHOD=api` or `CODEX_FORCED_LOGIN_METHOD=chatgpt` in
+the caller's environment. cc-use then passes the corresponding
+`forced_login_method` CLI override to new interactive Codex sessions. Leave the
+variable unset for the normal interactive login selection behavior.
+
 The agent starts from the pane's interactive shell so local startup files can
 populate `PATH`, API keys, and other environment settings. cc-use prefixes the
 launch with the shell builtin `command`, making startup independent of aliases
