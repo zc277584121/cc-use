@@ -81,10 +81,21 @@ case "$1" in
   display-message)
     printf '%s\n' "${CC_USE_TEST_GEOMETRY:-80 24 0}"
     ;;
-  resize-window|set-option|send-keys|paste-buffer)
+  resize-window|set-option|paste-buffer)
+    ;;
+  send-keys)
+    last_arg="${!#}"
+    if [ "$last_arg" = "Enter" ] \
+      && [ -n "${CC_USE_TEST_AGENT_EXIT_FILE:-}" ] \
+      && [ -f "${CC_USE_TEST_BUFFER_FILE:-}" ] \
+      && [ "$(cat "$CC_USE_TEST_BUFFER_FILE")" = "/exit" ]; then
+      mkdir -p "$(dirname "$CC_USE_TEST_AGENT_EXIT_FILE")"
+      printf 'exit_code=%s\nexited_at=1\n' "${CC_USE_TEST_AGENT_EXIT_CODE:-0}" > "$CC_USE_TEST_AGENT_EXIT_FILE"
+    fi
     ;;
   load-buffer)
     last_arg="${!#}"
+    cp "$last_arg" "$CC_USE_TEST_BUFFER_FILE"
     printf 'BUFFER:%s\n' "$(cat "$last_arg")" >> "$CC_USE_TMUX_LOG"
     ;;
   capture-pane)
@@ -112,17 +123,28 @@ assert_contains "$(new_session_name "/tmp/example project" codex)" "ccu-codex-ex
 assert_eq "=example" "$(tmux_session_target "example")" "tmux_session_target forces exact session matching"
 assert_eq "=example:" "$(tmux_pane_target "example")" "tmux_pane_target forces exact pane matching"
 
-codex_command="$(build_codex_command)"
-assert_eq "command codex --no-alt-screen --dangerously-bypass-approvals-and-sandbox" "$codex_command" "build_codex_command uses the interactive Codex command"
+codex_command="$(build_codex_command "/tmp/agent-exit.env")"
+assert_contains "$codex_command" "run-agent --exit-file /tmp/agent-exit.env -- codex" "build_codex_command launches Codex through the exit-status runner"
+assert_contains "$codex_command" "--no-alt-screen --dangerously-bypass-approvals-and-sandbox" "build_codex_command uses the interactive Codex flags"
 
 CODEX_FORCED_LOGIN_METHOD=api
-codex_command="$(build_codex_command)"
+codex_command="$(build_codex_command "/tmp/agent-exit.env")"
 assert_not_contains "$codex_command" "forced_login_method" "build_codex_command never selects a login method"
 unset CODEX_FORCED_LOGIN_METHOD
 
-claude_command="$(build_agent_command claude)"
-assert_contains "$claude_command" "command claude" "build_agent_command bypasses shell aliases and functions for Claude"
+claude_command="$(build_agent_command claude "/tmp/agent-exit.env")"
+assert_contains "$claude_command" "run-agent --exit-file /tmp/agent-exit.env -- claude" "build_agent_command launches Claude through the exit-status runner"
 assert_contains "$claude_command" "--dangerously-skip-permissions" "build_agent_command keeps Claude permissions bypass"
+
+runner_exit_file="$tmp_root/runner-zero.env"
+run_capture output status "$SCRIPT" run-agent --exit-file "$runner_exit_file" -- sh -c 'exit 0'
+[ "$status" -eq 0 ] || fail "run-agent should return the child exit code 0"
+assert_contains "$(cat "$runner_exit_file")" "exit_code=0" "run-agent records a successful child exit"
+
+runner_exit_file="$tmp_root/runner-seven.env"
+run_capture output status "$SCRIPT" run-agent --exit-file "$runner_exit_file" -- sh -c 'exit 7'
+[ "$status" -eq 7 ] || fail "run-agent should return the non-zero child exit code"
+assert_contains "$(cat "$runner_exit_file")" "exit_code=7" "run-agent records a non-zero child exit"
 
 run_capture output status "$SCRIPT"
 [ "$status" -eq 1 ] || fail "missing command should exit 1"
@@ -148,6 +170,7 @@ stub_dir="$tmp_root/stub"
 write_tmux_stub "$stub_dir"
 tmux_log="$tmp_root/tmux.log"
 session_file="$tmp_root/session.exists"
+buffer_file="$tmp_root/tmux-buffer"
 project="$tmp_root/project"
 lock_root="$tmp_root/locks"
 mkdir -p "$project"
@@ -158,6 +181,7 @@ common_env=(
   PATH="$stub_dir:$PATH"
   CC_USE_TMUX_LOG="$tmux_log"
   CC_USE_TEST_SESSION_FILE="$session_file"
+  CC_USE_TEST_BUFFER_FILE="$buffer_file"
   CC_USE_LOCK_ROOT="$lock_root"
   CC_USE_TMUX_SOCKET_NAME="$test_socket"
 )
@@ -172,7 +196,7 @@ assert_eq "Startup ready" "$(cat "$project/.cc-use/state/ccu-test/screens/ccu-te
 [ -f "$session_file" ] || fail "start creates the tmux session"
 [ -f "$project/.cc-use/state/ccu-test/session.json" ] || fail "start writes task-scoped session metadata"
 assert_contains "$(cat "$tmux_log")" "-L $test_socket new-session -d -s ccu-test -c $project" "start creates the session on the dedicated tmux socket"
-assert_contains "$(cat "$tmux_log")" "send-keys -t =ccu-test: command codex --no-alt-screen --dangerously-bypass-approvals-and-sandbox Enter" "start launches Codex through the login shell"
+assert_contains "$(cat "$tmux_log")" "run-agent --exit-file $project/.cc-use/state/ccu-test/agent-exit.env -- codex --no-alt-screen --dangerously-bypass-approvals-and-sandbox Enter" "start launches Codex through the exit-status runner"
 assert_eq "1" "$(grep -c ' send-keys ' "$tmux_log")" "start sends only the launch command and no blind follow-up Enter"
 
 : > "$tmux_log"
@@ -232,13 +256,49 @@ run_capture output status "${common_env[@]}" "$SCRIPT" monitor --project "$proje
 [ "$status" -eq 0 ] || fail "monitor should report a missing session"
 assert_contains "$output" '"event":"session_unavailable"' "monitor reports a missing session as an observation"
 
+: > "$tmux_log"
 : > "$session_file"
-mkdir -p "$project/.cc-use/state/ccu-test"
-run_capture output status "${common_env[@]}" "$SCRIPT" finish --project "$project" --session ccu-test
-[ "$status" -eq 0 ] || fail "finish should exit 0"
-assert_contains "$output" '"event":"session_finished"' "finish reports cleanup"
-[ ! -f "$session_file" ] || fail "finish kills the exact task session"
-[ ! -e "$project/.cc-use/state/ccu-test" ] || fail "finish removes the task observation state"
+graceful_exit_file="$project/.cc-use/state/ccu-test/agent-exit.env"
+run_capture output status "${common_env[@]}" \
+  CC_USE_TEST_AGENT_EXIT_FILE="$graceful_exit_file" \
+  CC_USE_TEST_AGENT_EXIT_CODE=0 \
+  "$SCRIPT" finish --project "$project" --session ccu-test
+[ "$status" -eq 0 ] || fail "graceful finish should exit 0"
+assert_contains "$output" '"shutdown":"graceful"' "finish reports a successful agent exit as graceful"
+assert_contains "$output" '"exit_code":0' "finish returns the successful agent exit code"
+assert_contains "$(cat "$tmux_log")" "BUFFER:/exit" "finish pastes the agent exit command"
+assert_eq "1" "$(grep -c 'send-keys -t =ccu-test: Enter' "$tmux_log")" "finish submits /exit exactly once"
+assert_not_contains "$(cat "$tmux_log")" "C-m" "finish does not use the task-input Enter fallback"
+[ ! -f "$session_file" ] || fail "finish removes the shell session after a graceful agent exit"
+[ ! -e "$project/.cc-use/state/ccu-test" ] || fail "finish removes graceful task state"
+
+: > "$tmux_log"
+: > "$session_file"
+mkdir -p "$project/.cc-use/state/ccu-abnormal"
+abnormal_exit_file="$project/.cc-use/state/ccu-abnormal/agent-exit.env"
+run_capture output status "${common_env[@]}" \
+  CC_USE_TEST_AGENT_EXIT_FILE="$abnormal_exit_file" \
+  CC_USE_TEST_AGENT_EXIT_CODE=7 \
+  "$SCRIPT" finish --project "$project" --session ccu-abnormal
+[ "$status" -eq 0 ] || fail "abnormal finish should still complete cleanup"
+assert_contains "$output" '"shutdown":"abnormal"' "finish reports a non-zero agent exit as abnormal"
+assert_contains "$output" '"exit_code":7' "finish returns the non-zero agent exit code"
+[ ! -f "$session_file" ] || fail "finish removes the shell session after an abnormal agent exit"
+[ ! -e "$project/.cc-use/state/ccu-abnormal" ] || fail "finish removes abnormal task state"
+
+: > "$tmux_log"
+: > "$session_file"
+mkdir -p "$project/.cc-use/state/ccu-forced"
+run_capture output status "${common_env[@]}" \
+  CC_USE_FINISH_GRACE_SECONDS=0 \
+  "$SCRIPT" finish --project "$project" --session ccu-forced
+[ "$status" -eq 0 ] || fail "forced finish should complete cleanup"
+assert_contains "$output" '"shutdown":"forced"' "finish reports a timed-out agent exit as forced"
+assert_contains "$output" '"exit_code":null' "forced finish has no child exit code"
+assert_contains "$output" '"reason":"agent_exit_timeout"' "forced finish explains the grace-period timeout"
+assert_contains "$(cat "$tmux_log")" "kill-session -t =ccu-forced" "forced finish kills the exact task session"
+[ ! -f "$session_file" ] || fail "forced finish removes the timed-out session"
+[ ! -e "$project/.cc-use/state/ccu-forced" ] || fail "forced finish removes timed-out task state"
 
 : > "$tmux_log"
 : > "$session_file"

@@ -256,18 +256,22 @@ skills/cc-use/scripts/cc-use finish \
   --session SESSION_NAME
 ```
 
-`finish` 会精确关闭目标 session，并删除本次 session 的观察状态。它不会按前缀杀掉其他用户 session。
+外层 Agent 只需要决定任务已经整体结束并调用 `finish`，不需要观察后续退出画面。`finish` 会先用独立输入流程粘贴 `/exit` 并只发送一次 `Enter`，然后等待内部 runner 记录内层 TUI 的真实 exit code。
+
+runner 是 Codex 或 Claude Code 进程的直接父进程，通过 shell 的等待机制取得子进程退出状态。exit code 为 `0` 时，`finish` 返回 `shutdown: graceful`；非 `0` 时返回 `shutdown: abnormal`；等待 10 秒仍没有退出记录时，才精确关闭目标 tmux session，并返回 `shutdown: forced`。这个判断不依赖屏幕文字、shell prompt 或外层 Agent 的语义分析。
+
+内层 TUI 退出后，登录 shell 可能仍留在 tmux 中，因此 `finish` 最后仍会关闭 session 并删除观察状态。这一步只是清理资源，不会把已经记录为 `graceful` 或 `abnormal` 的结果改成强制退出。10 秒是显式结束后的退出宽限期，与任务已经运行多久无关；cc-use 仍然不会按运行时长自动清理 session，也不会按前缀杀掉其他 session。
 
 ## shell 环境
 
-cc-use 让 tmux 先启动正常登录 shell，然后通过该 shell 执行：
+cc-use 让 tmux 先启动正常登录 shell，再启动一个内部 runner。runner 随后执行：
 
 ```text
 command codex ...
 command claude ...
 ```
 
-因此 PATH、API Key 和其他设置由用户自己的 shell 初始化规则提供。cc-use 不扫描 export 行，不依次 source 各种 rc 文件，也不维护额外环境文件。
+runner 保持为内层 TUI 的父进程，用于在进程结束时记录真实 exit code。因此 PATH、API Key 和其他设置仍由用户自己的 shell 初始化规则提供。cc-use 不扫描 export 行，不依次 source 各种 rc 文件，也不维护额外环境文件。
 
 `command` 会绕过 alias 和 shell function，避免用户 wrapper 重复添加启动参数，但仍然使用登录 shell 得到的 PATH。
 

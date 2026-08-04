@@ -12,7 +12,7 @@ description: >
 
 把当前 Agent 作为外层监督者，把 tmux 中的 Codex CLI 或 Claude Code 作为内层执行者。
 
-`scripts/cc-use` 只负责创建 session、发送输入、观察屏幕和清理资源。它不理解任务内容，也不判断屏幕表示完成、失败或阻塞。所有语义判断都由外层 Agent 完成。
+`scripts/cc-use` 只负责创建 session、发送输入、观察屏幕、记录内层进程退出状态和清理资源。它不理解任务内容，也不判断屏幕表示完成、失败或阻塞。所有任务语义判断都由外层 Agent 完成。
 
 ## 运行模型与关键概念
 
@@ -64,7 +64,7 @@ cc-use helper：输入、等待稳定、保存快照
 3. 用 `send` 发送一个短而具体的请求。
 4. 读取工作阶段快照，决定继续等待、在同一 session 发送下一个请求、询问用户或开始验收。
 5. 从外层环境检查真实文件、测试结果和用户要求；如果验收未通过但仍可修复，继续使用原 session。
-6. 整个用户任务最终结束时，用 `finish` 销毁本次 session。
+6. 整个用户任务最终结束时，用 `finish` 请求内层 TUI 正常退出并销毁本次 session。
 
 ## 命令速览
 
@@ -76,7 +76,7 @@ cc-use helper：输入、等待稳定、保存快照
 | `monitor` | 不发送输入，等待现有屏幕稳定并返回 observation | `--project`、`--session` |
 | `status` | 查看 session 是否存在和当前观察状态 | `--project`、`--session`、`--json` |
 | `scrollback` | 临时读取当前快照之前的 tmux 历史 | `--session`、`--lines`、`--start`、`--end` |
-| `finish` | 精确关闭任务 session 并删除对应观察状态 | `--project`、`--session` |
+| `finish` | 请求内层 TUI 退出，判断真实退出状态，再关闭 session 并删除观察状态 | `--project`、`--session` |
 | `snapshot` / `list` | 立即抓屏或列出 cc-use session，用于诊断 | `snapshot` 使用位置参数传入 session；`list` 无参数 |
 
 `--project` 默认为当前目录。`start` 可以自动生成唯一 session 名称，其他任务命令都应显式传入 `--session`。`--agent` 支持 `codex`、`claude` 和 `auto`，默认 `auto`。`keys` 接受字母、数字和 `Enter`、`Escape`、方向键等常用 tmux key 名称。
@@ -266,16 +266,26 @@ observation 以单行 JSON 打印到命令标准输出，同时追加到项目�
 
 不要设置基于运行时间的自动清理规则。一个合法任务可能持续数小时或跨天；只根据任务生命周期结束 session。
 
+外层 Agent 只负责判断整个任务何时结束并调用 `finish`，不需要再看退出画面。`finish` 的后续判断是机械过程：
+
+1. 用独立的单次提交流程向内层 TUI 粘贴 `/exit`，只发送一次 `Enter`；
+2. 启动内层 TUI 的 runner 是其直接父进程，会等待子进程结束并取得真实 exit code；
+3. exit code 为 `0` 时返回 `shutdown: graceful`，非 `0` 时返回 `shutdown: abnormal`；
+4. 等待 10 秒仍没有退出记录时，精确关闭目标 tmux session，并返回 `shutdown: forced`；
+5. 最后删除这个 session 的观察状态。
+
+runner 取得 exit code 的机制等价于父进程通过 `wait`/`waitpid` 接收子进程状态，不读取 shell prompt，也不让外层 Agent 根据屏幕猜测。正常或异常退出后，登录 shell 仍可能留在 tmux 中；此时关闭 tmux 只是资源清理，不会把结果改成 `forced`。10 秒只是在显式调用 `finish` 后给 `/exit` 的退出宽限期，不是按任务运行时长自动清理。
+
 ## 环境与启动命令
 
-cc-use 先让 tmux 启动正常登录 shell，再通过 shell 输入：
+cc-use 先让 tmux 启动正常登录 shell，再通过 shell 启动内部 runner。runner 随后执行：
 
 ```text
 command codex ...
 command claude ...
 ```
 
-登录 shell 按用户自己的正常规则加载 PATH、凭证和其他环境设置。cc-use 不扫描、不拼装、不注入环境变量，也不依次 source 各种 shell 配置文件。
+runner 保持为内层 TUI 的父进程，以便在 TUI 结束时记录 exit code。登录 shell 按用户自己的正常规则加载 PATH、凭证和其他环境设置。cc-use 不扫描、不拼装、不注入环境变量，也不依次 source 各种 shell 配置文件。
 
 `command` 会绕过 shell alias 和 function，但仍然使用登录 shell 最终得到的 PATH。如果用户刚修改了正常 shell 启动文件，新建 session 会重新读取；已经运行的旧 session 不会自动刷新环境。
 
