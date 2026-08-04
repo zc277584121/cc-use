@@ -69,7 +69,7 @@ cc-use helper：输入、等待稳定、保存快照
 
 | 命令 | 用途 | 主要参数 |
 |---|---|---|
-| `start` | 创建任务 session，启动内层 TUI 并返回启动 observation | `--project`、`--agent`、`--profile`、`--session` |
+| `start` | 创建任务 session，启动内层 TUI 并返回启动 observation | `--project`、`--agent`、`--session` |
 | `send "TASK"` | 向现有内层 Agent 对话发送一个短 prompt | `--project`、`--session` |
 | `keys KEY...` | 对启动菜单或明确的交互提示发送原始按键 | `--project`、`--session` |
 | `monitor` | 不发送输入，等待现有屏幕稳定并返回 observation | `--project`、`--session` |
@@ -78,7 +78,7 @@ cc-use helper：输入、等待稳定、保存快照
 | `finish` | 精确关闭任务 session 并删除对应观察状态 | `--project`、`--session` |
 | `snapshot` / `list` | 立即抓屏或列出 cc-use session，用于诊断 | `snapshot` 使用位置参数传入 session；`list` 无参数 |
 
-`--project` 默认为当前目录。`start` 可以自动生成唯一 session 名称，其他任务命令都应显式传入 `--session`。`--agent` 支持 `codex`、`claude` 和 `auto`，默认 `auto`；`--profile` 只用于用户明确指定的 Codex profile。`keys` 接受字母、数字和 `Enter`、`Escape`、方向键等常用 tmux key 名称。
+`--project` 默认为当前目录。`start` 可以自动生成唯一 session 名称，其他任务命令都应显式传入 `--session`。`--agent` 支持 `codex`、`claude` 和 `auto`，默认 `auto`。`keys` 接受字母、数字和 `Enter`、`Escape`、方向键等常用 tmux key 名称。
 
 `start`、`send`、`keys` 和 `monitor` 支持 `--initial-quiet-seconds` 与 `--poll-interval`，默认分别为 30 秒和 2 秒；它们只控制屏幕观察，不表示任务进度或下次检查建议。
 
@@ -99,15 +99,6 @@ cc-use helper：输入、等待稳定、保存快照
 如果用户没有明确指定跨 Agent 组合，也没有其他特殊要求，始终让内外层使用同一 Agent 家族：不要从 Codex 外层启动 Claude Code，也不要从 Claude Code 外层启动 Codex。
 
 `start` 会生成唯一 session 名称。保存返回 JSON 中的 `session`，后续命令都显式传入它。
-
-只有用户明确要求特定 Codex profile 时，才在启动阶段添加：
-
-```bash
-<skill_dir>/scripts/cc-use start \
-  --project "$PWD" \
-  --agent codex \
-  --profile PROFILE_NAME
-```
 
 ### 启动检查
 

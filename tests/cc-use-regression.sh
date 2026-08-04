@@ -107,18 +107,15 @@ assert_contains "$(new_session_name "/tmp/example project" codex)" "ccu-codex-ex
 assert_eq "=example" "$(tmux_session_target "example")" "tmux_session_target forces exact session matching"
 assert_eq "=example:" "$(tmux_pane_target "example")" "tmux_pane_target forces exact pane matching"
 
-codex_command="$(build_codex_command "")"
+codex_command="$(build_codex_command)"
 assert_eq "command codex --no-alt-screen --dangerously-bypass-approvals-and-sandbox" "$codex_command" "build_codex_command uses the interactive Codex command"
 
 CODEX_FORCED_LOGIN_METHOD=api
-codex_command="$(build_codex_command "")"
+codex_command="$(build_codex_command)"
 assert_not_contains "$codex_command" "forced_login_method" "build_codex_command never selects a login method"
 unset CODEX_FORCED_LOGIN_METHOD
 
-codex_command="$(build_codex_command "zilliz")"
-assert_eq "command codex --no-alt-screen --dangerously-bypass-approvals-and-sandbox --profile zilliz" "$codex_command" "build_codex_command appends an explicit profile"
-
-claude_command="$(build_agent_command claude "")"
+claude_command="$(build_agent_command claude)"
 assert_contains "$claude_command" "command claude" "build_agent_command bypasses shell aliases and functions for Claude"
 assert_contains "$claude_command" "--dangerously-skip-permissions" "build_agent_command keeps Claude permissions bypass"
 

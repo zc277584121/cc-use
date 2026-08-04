@@ -4,7 +4,7 @@ set -euo pipefail
 usage() {
   cat <<'EOF'
 Usage:
-  cc-use start [--project DIR] [--agent codex|claude|auto] [--profile NAME] [--session NAME]
+  cc-use start [--project DIR] [--agent codex|claude|auto] [--session NAME]
   cc-use send "TASK" --session NAME [--project DIR]
   cc-use keys KEY... --session NAME [--project DIR]
   cc-use monitor --session NAME [--project DIR]
@@ -277,23 +277,17 @@ tmux_send_keys() {
 }
 
 build_codex_command() {
-  local profile="$1"
   printf 'command %q --no-alt-screen --dangerously-bypass-approvals-and-sandbox' "codex"
-  if [ -n "$profile" ]; then
-    printf ' --profile %q' "$profile"
-  fi
 }
 
 build_agent_command() {
   local agent="$1"
-  local profile="$2"
   validate_agent "$agent"
   case "$agent" in
     codex)
-      build_codex_command "$profile"
+      build_codex_command
       ;;
     claude)
-      [ -z "$profile" ] || die "--profile is only supported for codex"
       printf 'command %q --dangerously-skip-permissions' "claude"
       ;;
   esac
@@ -463,7 +457,6 @@ cmd_start() {
   local project="."
   local session=""
   local agent="auto"
-  local profile=""
   local initial_quiet=30
   local poll_interval=2
   local command
@@ -471,7 +464,6 @@ cmd_start() {
     case "$1" in
       --project) project="$2"; shift 2 ;;
       --agent) agent="$2"; shift 2 ;;
-      --profile) profile="$2"; shift 2 ;;
       --session) session="$2"; shift 2 ;;
       --initial-quiet-seconds) initial_quiet="$2"; shift 2 ;;
       --poll-interval) poll_interval="$2"; shift 2 ;;
@@ -487,7 +479,7 @@ cmd_start() {
   validate_session_name "$session"
   tmux_has_session "$session" && die "session already exists: $session"
   acquire_session_lock "$session"
-  command="$(build_agent_command "$agent" "$profile")"
+  command="$(build_agent_command "$agent")"
   launch_agent_session "$session" "$project" "$command"
   write_session_metadata "$project" "$session" "$agent"
   watch_once "$project" "$session" "startup" "$initial_quiet" "$poll_interval"
