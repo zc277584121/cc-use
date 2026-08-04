@@ -2,7 +2,7 @@
 
 cc-use 是一个面向命令行编码 Agent 的监督式执行 Skill。当前外层 Agent 保留用户目标、任务拆解和最终验收，把耗时的调查、实现、测试或真实 TUI 操作交给 tmux 中的内层 Agent。
 
-这里的 Agent 不限定厂商。外层和内层可以是 OpenAI Codex，也可以是 Claude Code；关键要求是内外层使用同一个 Agent 家族。
+这里的 Agent 不限定厂商。外层和内层可以是 OpenAI Codex，也可以是 Claude Code。用户没有明确指定跨 Agent 组合或其他特殊要求时，默认让内外层使用同一个 Agent 家族。
 
 ```text
 用户
@@ -208,7 +208,11 @@ skills/cc-use/scripts/cc-use scrollback \
   --end -2001
 ```
 
-scrollback 只用于临时补充上下文。cc-use 不默认保存完整长期 transcript。
+`screen_path` 保存的是 observation 产生时的当前 pane 快照，不一定包含内层 Agent 的完整回答。最终回答较长、终端高度较小，或者关键调查细节出现在更早位置时，需要使用 scrollback 向前查看。
+
+先读取最近一段；信息仍不够时，再使用不重叠的范围继续向前翻。每次读完后，由外层 Agent 根据内容判断证据是否已经足够、是否还要继续向前以及下一次读取多大范围。不要预先规定固定页数，也不要默认一次读取全部历史。
+
+scrollback 只用于这种渐进式上下文补充。cc-use 不默认保存完整长期 transcript，也不在屏幕快速变化时持续读取。
 
 ## 外层验收
 

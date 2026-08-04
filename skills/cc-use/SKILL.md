@@ -14,11 +14,29 @@ description: >
 
 `scripts/cc-use` 只负责创建 session、发送输入、观察屏幕和清理资源。它不理解任务内容，也不判断屏幕表示完成、失败或阻塞。所有语义判断都由外层 Agent 完成。
 
-## 核心分工
+## 运行模型与关键概念
+
+cc-use 用 tmux 把执行上下文和监督上下文分开。内层 Agent 可以读取大量文件、运行长命令并产生很多终端输出；外层 Agent 保留用户目标、风险和验收标准，只在适合判断的时刻查看屏幕证据。
+
+```text
+用户目标
+  ↓
+外层 Agent：拆解、判断、纠偏、验收
+  ↓ 短 prompt                         ↑ observation
+cc-use helper：输入、等待稳定、保存快照
+  ↓                                  ↑ tmux pane
+内层 Agent：调查、编码、执行命令
+```
+
+关键概念：
 
 - 外层 Agent：保留用户目标、拆解任务、检查风险、阅读快照、纠正方向并完成最终验收。
 - 内层 Agent：调查问题、修改代码、运行命令和执行交互式工作。
 - cc-use helper：管理 tmux、可靠发送文本、在屏幕稳定时保存快照。
+- session：一个完整用户任务对应的 tmux session，其中保留同一个内层 Agent 对话。
+- 屏幕快照：observation 产生时当前 tmux pane 的标准化文本，只代表当时可见区域。
+- observation：helper 在屏幕连续稳定后输出的结构化 JSON 事件，告诉外层“现在适合查看”，不替外层判断任务状态。
+- scrollback：当前快照不足时临时读取的 tmux 历史，由外层渐进式向前翻看。
 
 不要把整个长期任务一次性塞给内层 Agent。每次只发送一个边界清楚的调查、实现、测试或验证请求，然后根据真实结果决定下一步。
 
@@ -40,12 +58,29 @@ description: >
 
 标准流程：
 
-1. 用 `start` 创建 session 并启动同一 Agent 家族的内层 TUI。
+1. 用 `start` 创建 session；用户没有指定特殊组合时，启动同一 Agent 家族的内层 TUI。
 2. 读取启动阶段返回的 `screen_path`，确认 TUI 已经可以正常接收任务。
 3. 用 `send` 发送一个短而具体的请求。
 4. 读取工作阶段快照，决定继续等待、在同一 session 发送下一个请求、询问用户或开始验收。
 5. 从外层环境检查真实文件、测试结果和用户要求；如果验收未通过但仍可修复，继续使用原 session。
 6. 整个用户任务最终结束时，用 `finish` 销毁本次 session。
+
+## 命令速览
+
+| 命令 | 用途 | 主要参数 |
+|---|---|---|
+| `start` | 创建任务 session，启动内层 TUI 并返回启动 observation | `--project`、`--agent`、`--profile`、`--session` |
+| `send "TASK"` | 向现有内层 Agent 对话发送一个短 prompt | `--project`、`--session` |
+| `keys KEY...` | 对启动菜单或明确的交互提示发送原始按键 | `--project`、`--session` |
+| `monitor` | 不发送输入，等待现有屏幕稳定并返回 observation | `--project`、`--session` |
+| `status` | 查看 session 是否存在和当前观察状态 | `--project`、`--session`、`--json` |
+| `scrollback` | 临时读取当前快照之前的 tmux 历史 | `--session`、`--lines`、`--start`、`--end` |
+| `finish` | 精确关闭任务 session 并删除对应观察状态 | `--project`、`--session` |
+| `snapshot` / `list` | 立即抓屏或列出 cc-use session，用于诊断 | `snapshot` 使用位置参数传入 session；`list` 无参数 |
+
+`--project` 默认为当前目录。`start` 可以自动生成唯一 session 名称，其他任务命令都应显式传入 `--session`。`--agent` 支持 `codex`、`claude` 和 `auto`，默认 `auto`；`--profile` 只用于用户明确指定的 Codex profile。`keys` 接受字母、数字和 `Enter`、`Escape`、方向键等常用 tmux key 名称。
+
+`start`、`send`、`keys` 和 `monitor` 支持 `--initial-quiet-seconds` 与 `--poll-interval`，默认分别为 30 秒和 2 秒；它们只控制屏幕观察，不表示任务进度或下次检查建议。
 
 ## 启动内层 Agent
 
@@ -61,7 +96,7 @@ description: >
 <skill_dir>/scripts/cc-use start --project "$PWD" --agent claude
 ```
 
-始终让内外层使用同一 Agent 家族，不要从 Codex 外层启动 Claude Code，也不要从 Claude Code 外层启动 Codex。
+如果用户没有明确指定跨 Agent 组合，也没有其他特殊要求，始终让内外层使用同一 Agent 家族：不要从 Codex 外层启动 Claude Code，也不要从 Claude Code 外层启动 Codex。
 
 `start` 会生成唯一 session 名称。保存返回 JSON 中的 `session`，后续命令都显式传入它。
 
@@ -137,7 +172,7 @@ helper 不提供语义上的“下次检查建议”。外层 Agent 自己选择
 
 ## 补充屏幕上下文
 
-稳定快照不够时，临时读取 tmux scrollback：
+`screen_path` 只保存 observation 产生时的当前 pane。内层最终回答可能比终端可见区域更长，关键错误、调查结论或命令输出也可能位于更早的历史中。稳定快照不够时，临时读取最近的 tmux scrollback：
 
 ```bash
 <skill_dir>/scripts/cc-use scrollback \
@@ -156,11 +191,15 @@ helper 不提供语义上的“下次检查建议”。外层 Agent 自己选择
 
 负数表示 tmux 历史行，`0` 表示当前可见区域第一行，`-` 表示当前 pane 末尾。
 
-只在快照上下文不足时使用 scrollback。不要把它当作持续日志流，也不要在屏幕仍快速变化时反复读取。
+采用渐进方式阅读：先看最近一段；如果内容从中间开始、引用了更早细节或证据仍不完整，再用不重叠的范围继续向前。每读完一段，都由外层 Agent 根据语义决定是否已经足够、是否继续翻、下一段读取多大范围。不要预设固定页数，也不要为了“完整”而默认读取全部历史。
+
+只在快照上下文不足时使用 scrollback。不要重复读取相同范围，不要把它当作持续日志流，也不要在屏幕仍快速变化时反复读取。
 
 ## 理解 observation
 
-典型事件：
+observation 是 helper 与外层 Agent 之间的观察协议。`start`、`send`、`keys` 或 `monitor` 会反复抓取并计算屏幕哈希；屏幕持续变化时继续等待，连续稳定达到静默阈值后保存 `.txt` 快照并输出一条 observation。
+
+observation 以单行 JSON 打印到命令标准输出，同时追加到项目内 `.cc-use/state/<session>/watch.observations.jsonl`。`watch.json` 保存最近的观察状态。典型事件：
 
 ```json
 {
@@ -173,6 +212,18 @@ helper 不提供语义上的“下次检查建议”。外层 Agent 自己选择
   "screen_path": "/project/.cc-use/state/.../screens/...txt"
 }
 ```
+
+字段含义：
+
+| 字段 | 含义 |
+|---|---|
+| `event` | `screen_stable` 表示屏幕已连续稳定；session 消失时为 `session_unavailable` |
+| `phase` | observation 来自 `startup`、`work`、`interaction` 或 `monitor` 阶段 |
+| `session` | 本次完整用户任务对应的精确 tmux session 名称 |
+| `observed_at` | observation 产生时的 Unix 时间戳 |
+| `silence_seconds` | 当前屏幕连续未变化的秒数 |
+| `screen_digest` | 标准化屏幕文本的哈希，用于检测变化 |
+| `screen_path` | 保存当前 pane 文本的 `.txt` 文件路径，不是完整 transcript |
 
 `screen_stable` 只表示当前屏幕在静默窗口内没有变化，适合外层 Agent 阅读。它不表示：
 
@@ -196,7 +247,7 @@ helper 不提供语义上的“下次检查建议”。外层 Agent 自己选择
 - 显示需要普通交互输入：只有在意图明确且授权充分时才用 `keys` 发送响应。
 - 显示可明确拒绝的更新提示：选择“不升级”或等价选项，重新检查画面。
 - 显示登录、认证、账号选择或含义不清的更新提示：停止，清理 session 并报告。
-- 内容被截断或不足以理解：使用一次 `scrollback` 获取足够上下文。
+- 内容被截断或不足以理解：从最近历史开始使用 `scrollback`，逐段向前补充，直到证据足够。
 
 内层 Agent 的文字汇报不能作为成功证明。最终验收必须在外层执行，包括检查真实文件、运行相关测试、验证命令行为或检查 UI。
 
