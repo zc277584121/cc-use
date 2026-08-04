@@ -4,7 +4,8 @@ description: >
   把较长的编码、排查、测试或交互式 CLI 工作交给 tmux 中的内层命令行编码 Agent，
   由当前外层 Agent 负责拆解任务、读取稳定屏幕快照、纠正方向、执行最终验收，并在本次
   任务结束后销毁内层 session。适用于用户明确要求使用 cc-use、希望把长时间实现工作
-  交给内层 Agent，或需要在真实 Codex CLI 或 Claude Code TUI 中完成受监督工作。
+  交给内层 Agent、需要在真实 Codex CLI 或 Claude Code TUI 中完成受监督工作，或需要
+  评估如何由 cron、launchd、systemd 等外部调度器触发 cc-use。
 ---
 
 # cc-use
@@ -20,6 +21,16 @@ description: >
 - cc-use helper：管理 tmux、可靠发送文本、在屏幕稳定时保存快照。
 
 不要把整个长期任务一次性塞给内层 Agent。每次只发送一个边界清楚的调查、实现、测试或验证请求，然后根据真实结果决定下一步。
+
+## 适用场景
+
+- 对大型实现或重构按调查、编码、测试和修正分阶段推进。
+- 让内层执行耗时排查、复现、构建、测试、下载或其他可能产生大量输出的命令。
+- 由外层设计端到端、边界条件或对抗性测试，再让内层在真实环境中执行。
+- 验证 Codex CLI、Claude Code、Skill、插件、MCP 或其他必须连续交互的 TUI 工作流。
+- 用户明确要求使用 cc-use，或短任务需要真实内层 TUI 隔离和验证。
+
+简单问答、一次文件读取、单条低风险命令或外层可以快速直接完成的修改，通常不要启动 cc-use。需要频繁选择账号、输入凭证或持续等待用户即时决策的任务，不适合无人监督执行。
 
 ## 生命周期
 
@@ -242,3 +253,9 @@ command claude ...
 ## TUI 录制
 
 只有用户明确要求录制终端演示或生成 GIF 时，才读取 `references/tui-recording.md`。
+
+## 定时任务
+
+用户要求用 cron、launchd、systemd timer 或其他外部调度器触发 cc-use 时，先读取 [references/scheduled-tasks.md](references/scheduled-tasks.md)。把它作为环境和生命周期设计参考，不要恢复 schedule 命令、定时规则数据库或 cc-use 内部调度框架。
+
+具体调度方式必须根据任务所属用户、登录 shell、环境变量来源、机器休眠行为、重叠执行策略和通知方式决定。cc-use helper 仍然只负责 tmux session、输入、观察和清理；外部调度器负责触发，外层 Agent 或控制器负责语义监督。
