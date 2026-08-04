@@ -6,6 +6,7 @@ usage() {
 Usage:
   cc-use start [--project DIR] [--agent codex|claude|auto] [--profile NAME] [--session NAME]
   cc-use send "TASK" --session NAME [--project DIR]
+  cc-use keys KEY... --session NAME [--project DIR]
   cc-use monitor --session NAME [--project DIR]
   cc-use status --session NAME [--project DIR] [--json]
   cc-use scrollback --session NAME [--lines N] [--start LINE] [--end LINE]
@@ -171,6 +172,15 @@ validate_line_spec() {
   esac
 }
 
+validate_tmux_key() {
+  local key="$1"
+  case "$key" in
+    Enter|Escape|Up|Down|Left|Right|Tab|BTab|Space|BSpace|DC|Home|End|IC|NPage|PPage) ;;
+    F[1-9]|F1[0-2]|C-[[:alnum:]]|M-[[:alnum:]]|[[:alnum:]]) ;;
+    *) die "unsupported key: $key" ;;
+  esac
+}
+
 require_session() {
   local session="$1"
   [ -n "$session" ] || die "--session is required"
@@ -258,6 +268,12 @@ tmux_send_text() {
   tmux send-keys -t "$pane_target" C-m
   sleep 0.7
   tmux send-keys -t "$pane_target" Enter
+}
+
+tmux_send_keys() {
+  local session="$1"
+  shift
+  tmux send-keys -t "$(tmux_pane_target "$session")" "$@"
 }
 
 build_codex_command() {
@@ -507,6 +523,39 @@ cmd_send() {
   trap - EXIT
 }
 
+cmd_keys() {
+  local project="."
+  local session=""
+  local initial_quiet=30
+  local poll_interval=2
+  local -a keys=()
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --project) project="$2"; shift 2 ;;
+      --session) session="$2"; shift 2 ;;
+      --initial-quiet-seconds) initial_quiet="$2"; shift 2 ;;
+      --poll-interval) poll_interval="$2"; shift 2 ;;
+      --*) die "unknown keys option: $1" ;;
+      *)
+        validate_tmux_key "$1"
+        keys+=("$1")
+        shift
+        ;;
+    esac
+  done
+  [ "${#keys[@]}" -gt 0 ] || die "keys requires at least one key"
+  validate_nonnegative_integer "$initial_quiet" "--initial-quiet-seconds"
+  validate_positive_integer "$poll_interval" "--poll-interval"
+  project="$(project_abs "$project")"
+  require_session "$session"
+  tmux_has_session "$session" || die "session is not available: $session"
+  acquire_session_lock "$session"
+  tmux_send_keys "$session" "${keys[@]}"
+  watch_once "$project" "$session" "interaction" "$initial_quiet" "$poll_interval"
+  release_session_lock
+  trap - EXIT
+}
+
 cmd_monitor() {
   local project="."
   local session=""
@@ -641,6 +690,9 @@ main() {
       task="$1"
       shift
       cmd_send "$task" "$@"
+      ;;
+    keys)
+      cmd_keys "$@"
       ;;
     monitor)
       cmd_monitor "$@"

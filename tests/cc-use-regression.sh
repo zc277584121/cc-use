@@ -130,6 +130,10 @@ run_capture output status "$SCRIPT" send
 [ "$status" -eq 1 ] || fail "send without task should exit 1"
 assert_contains "$output" "send requires TASK" "send without task reports a clear error"
 
+run_capture output status "$SCRIPT" keys
+[ "$status" -eq 1 ] || fail "keys without key names should exit 1"
+assert_contains "$output" "keys requires at least one key" "keys requires an explicit interaction"
+
 run_capture output status "$SCRIPT" monitor
 [ "$status" -eq 1 ] || fail "monitor without a session should exit 1"
 assert_contains "$output" "--session is required" "monitor requires an explicit task session"
@@ -167,6 +171,15 @@ assert_eq "Startup ready" "$(cat "$project/.cc-use/state/ccu-test/screens/ccu-te
 assert_contains "$(cat "$tmux_log")" "new-session -d -s ccu-test -c $project" "start creates the session in the project"
 assert_contains "$(cat "$tmux_log")" "send-keys -t =ccu-test: command codex --no-alt-screen --dangerously-bypass-approvals-and-sandbox Enter" "start launches Codex through the login shell"
 assert_eq "1" "$(grep -c '^send-keys ' "$tmux_log")" "start sends only the launch command and no blind follow-up Enter"
+
+: > "$tmux_log"
+run_capture output status "${common_env[@]}" CC_USE_TEST_SCREEN="Ready after interaction" \
+  "$SCRIPT" keys Down Enter --project "$project" --session ccu-test --initial-quiet-seconds 0 --poll-interval 1
+[ "$status" -eq 0 ] || fail "keys should exit 0"
+assert_contains "$output" '"phase":"interaction"' "keys marks the observation as interaction"
+assert_contains "$(cat "$tmux_log")" "send-keys -t =ccu-test: Down Enter" "keys sends only the explicitly selected TUI keys"
+assert_not_contains "$(cat "$tmux_log")" "C-u" "keys does not use the task-input clearing sequence"
+assert_not_contains "$(cat "$tmux_log")" "C-m" "keys does not use the task-input Enter fallback"
 
 : > "$tmux_log"
 run_capture output status "${common_env[@]}" CC_USE_TEST_SCREEN="Task complete" \
