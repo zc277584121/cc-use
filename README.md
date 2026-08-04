@@ -104,6 +104,30 @@ Claude Code 示例：
 
 任务结束后，外层 Agent 必须调用 `finish`。session 不会被保留给未来无关任务。
 
+## tmux socket 与命名
+
+cc-use 使用固定的专用 tmux socket：
+
+```text
+cc-use
+```
+
+helper 内部所有 tmux 操作都等价于 `tmux -L cc-use ...`，因此不会与用户默认 tmux server 中的 session 混在一起。
+
+自动生成的 session 名称使用：
+
+```text
+ccu-<agent>-<project>-<timestamp>-<pid>
+```
+
+每个完整任务仍然拥有独立 session；多个任务可以在同一个专用 socket 中并行。用户显式指定 session 名称时，helper 也会保留该名称，`list` 会列出专用 socket 内的全部 session。
+
+需要直接使用 tmux 诊断或只读 attach 时，必须指定同一个 socket 和精确 target，例如：
+
+```bash
+tmux -L cc-use attach -r -t '=SESSION_NAME'
+```
+
 ## 启动安全
 
 启动和发送任务被拆成两个阶段。

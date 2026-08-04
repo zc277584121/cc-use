@@ -33,6 +33,7 @@ cc-use helper：输入、等待稳定、保存快照
 - 外层 Agent：保留用户目标、拆解任务、检查风险、阅读快照、纠正方向并完成最终验收。
 - 内层 Agent：调查问题、修改代码、运行命令和执行交互式工作。
 - cc-use helper：管理 tmux、可靠发送文本、在屏幕稳定时保存快照。
+- tmux socket：cc-use 固定使用名为 `cc-use` 的专用 socket，与用户默认 tmux server 隔离。
 - session：一个完整用户任务对应的 tmux session，其中保留同一个内层 Agent 对话。
 - 屏幕快照：observation 产生时当前 tmux pane 的标准化文本，只代表当时可见区域。
 - observation：helper 在屏幕连续稳定后输出的结构化 JSON 事件，告诉外层“现在适合查看”，不替外层判断任务状态。
@@ -99,6 +100,8 @@ cc-use helper：输入、等待稳定、保存快照
 如果用户没有明确指定跨 Agent 组合，也没有其他特殊要求，始终让内外层使用同一 Agent 家族：不要从 Codex 外层启动 Claude Code，也不要从 Claude Code 外层启动 Codex。
 
 `start` 会生成唯一 session 名称。保存返回 JSON 中的 `session`，后续命令都显式传入它。
+
+默认 session 名称为 `ccu-<agent>-<project>-<timestamp>-<pid>`。多个任务共享专用 socket `cc-use`，但各自使用独立 session。用户显式传入 `--session` 时保留该名称。
 
 ### 启动检查
 
@@ -277,6 +280,14 @@ command claude ...
 `command` 会绕过 shell alias 和 function，但仍然使用登录 shell 最终得到的 PATH。如果用户刚修改了正常 shell 启动文件，新建 session 会重新读取；已经运行的旧 session 不会自动刷新环境。
 
 ## 诊断命令
+
+helper 的所有 tmux 操作都使用专用 socket `cc-use`。只有 helper 无法表达所需诊断时才直接调用 tmux；fallback 命令必须同时使用 `-L cc-use` 和精确 target，且不要在 `send`、`keys` 或 `monitor` 正在操作同一 session 时绕过 session 锁。
+
+只读 attach：
+
+```bash
+tmux -L cc-use attach -r -t '=SESSION_NAME'
+```
 
 立即抓取当前 pane：
 

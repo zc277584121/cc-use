@@ -3,6 +3,8 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SCRIPT="$ROOT_DIR/skills/cc-use/scripts/cc-use"
+test_socket="cc-use-test-$$"
+export CC_USE_TMUX_SOCKET_NAME="$test_socket"
 
 tmp_root="$(mktemp -d)"
 cleanup() {
@@ -63,6 +65,9 @@ write_tmux_stub() {
   cat > "$stub_dir/tmux" <<'EOF'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >> "$CC_USE_TMUX_LOG"
+if [ "${1:-}" = "-L" ]; then
+  shift 2
+fi
 case "$1" in
   has-session)
     [ -f "$CC_USE_TEST_SESSION_FILE" ]
@@ -91,7 +96,7 @@ case "$1" in
     fi
     ;;
   list-sessions)
-    printf 'user-session\nccu-codex-project-1\n'
+    printf 'ccu-codex-project-1\ncustom-task\n'
     ;;
 esac
 EOF
@@ -154,6 +159,7 @@ common_env=(
   CC_USE_TMUX_LOG="$tmux_log"
   CC_USE_TEST_SESSION_FILE="$session_file"
   CC_USE_LOCK_ROOT="$lock_root"
+  CC_USE_TMUX_SOCKET_NAME="$test_socket"
 )
 
 run_capture output status "${common_env[@]}" CC_USE_TEST_SCREEN=$'\033[31mStartup ready\033[0m  ' \
@@ -165,9 +171,9 @@ assert_contains "$output" '"session":"ccu-test"' "start returns the generated ta
 assert_eq "Startup ready" "$(cat "$project/.cc-use/state/ccu-test/screens/ccu-test-0001.txt")" "start saves a normalized startup screen"
 [ -f "$session_file" ] || fail "start creates the tmux session"
 [ -f "$project/.cc-use/state/ccu-test/session.json" ] || fail "start writes task-scoped session metadata"
-assert_contains "$(cat "$tmux_log")" "new-session -d -s ccu-test -c $project" "start creates the session in the project"
+assert_contains "$(cat "$tmux_log")" "-L $test_socket new-session -d -s ccu-test -c $project" "start creates the session on the dedicated tmux socket"
 assert_contains "$(cat "$tmux_log")" "send-keys -t =ccu-test: command codex --no-alt-screen --dangerously-bypass-approvals-and-sandbox Enter" "start launches Codex through the login shell"
-assert_eq "1" "$(grep -c '^send-keys ' "$tmux_log")" "start sends only the launch command and no blind follow-up Enter"
+assert_eq "1" "$(grep -c ' send-keys ' "$tmux_log")" "start sends only the launch command and no blind follow-up Enter"
 
 : > "$tmux_log"
 run_capture output status "${common_env[@]}" CC_USE_TEST_SCREEN="Ready after interaction" \
@@ -249,34 +255,35 @@ assert_not_contains "$(cat "$tmux_log")" "resize-window" "snapshot does not resi
 
 run_capture output status "${common_env[@]}" "$SCRIPT" list
 [ "$status" -eq 0 ] || fail "list should exit 0"
-assert_eq "ccu-codex-project-1" "$output" "list hides unrelated user sessions"
+assert_eq $'ccu-codex-project-1\ncustom-task' "$output" "list returns every session on the dedicated socket"
 
 if command -v tmux >/dev/null 2>&1; then
   base="ccu-target-check-$$"
   sibling="${base}-sibling"
   tiny="${base}-tiny"
   cleanup_tmux() {
-    tmux kill-session -t "=$base" >/dev/null 2>&1 || true
-    tmux kill-session -t "=$sibling" >/dev/null 2>&1 || true
-    tmux kill-session -t "=$tiny" >/dev/null 2>&1 || true
+    tmux_cmd kill-session -t "=$base" >/dev/null 2>&1 || true
+    tmux_cmd kill-session -t "=$sibling" >/dev/null 2>&1 || true
+    tmux_cmd kill-session -t "=$tiny" >/dev/null 2>&1 || true
+    tmux_cmd kill-server >/dev/null 2>&1 || true
   }
   cleanup_tmux
   trap 'cleanup_tmux; cleanup' EXIT
 
-  tmux new-session -d -s "$sibling"
+  tmux_cmd new-session -d -s "$sibling"
   if tmux_has_session "$base"; then
     fail "exact lookup matched a prefix sibling"
   fi
 
-  tmux new-session -d -s "$base"
-  tmux kill-session -t "=$base"
-  tmux has-session -t "=$base" 2>/dev/null && fail "exact cleanup left the target alive"
-  tmux has-session -t "=$sibling" 2>/dev/null || fail "exact cleanup removed a prefix sibling"
+  tmux_cmd new-session -d -s "$base"
+  tmux_cmd kill-session -t "=$base"
+  tmux_cmd has-session -t "=$base" 2>/dev/null && fail "exact cleanup left the target alive"
+  tmux_cmd has-session -t "=$sibling" 2>/dev/null || fail "exact cleanup removed a prefix sibling"
 
-  tmux new-session -d -s "$tiny"
-  tmux resize-window -t "=$tiny" -x 10 -y 4
+  tmux_cmd new-session -d -s "$tiny"
+  tmux_cmd resize-window -t "=$tiny" -x 10 -y 4
   "$SCRIPT" snapshot "$tiny" >/dev/null
-  assert_eq "160x50" "$(tmux list-panes -t "=$tiny" -F '#{pane_width}x#{pane_height}')" "snapshot repairs a tiny detached tmux pane"
+  assert_eq "160x50" "$(tmux_cmd list-panes -t "=$tiny" -F '#{pane_width}x#{pane_height}')" "snapshot repairs a tiny detached tmux pane"
 
   cleanup_tmux
   trap cleanup EXIT

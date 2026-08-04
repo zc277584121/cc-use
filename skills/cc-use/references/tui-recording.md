@@ -55,7 +55,7 @@ OUT="$PWD/tmp/recording-$(date +%s)"
 mkdir -p "$OUT"
 
 ( asciinema rec -y --overwrite \
-    -c "timeout 50 tmux attach -r -t SESSION_NAME" \
+    -c "timeout 50 tmux -L cc-use attach -r -t '=SESSION_NAME'" \
     --idle-time-limit 2 \
     "$OUT/demo.cast" > "$OUT/asciinema.log" 2>&1 ) &
 ASCII_PID=$!
@@ -72,7 +72,7 @@ wait "$ASCII_PID" 2>/dev/null
 
 关键约束：
 
-- 必须使用 `tmux attach -r`，避免录制端意外向内层 TUI 输入内容。
+- 必须使用 `tmux -L cc-use attach -r`，连接专用 socket 并避免录制端意外向内层 TUI 输入内容。
 - 为录制设置明确的最长时长，给 Agent 延迟和任务执行留出余量。
 - `--idle-time-limit` 用于压缩长时间静默，不会删除真实事件。
 - 驱动演示仍使用 cc-use 的 `send`，不要绕过启动检查。
@@ -80,14 +80,14 @@ wait "$ASCII_PID" 2>/dev/null
 如果录制需要固定窗口大小，只调整目标 session：
 
 ```bash
-tmux set-option -t SESSION_NAME window-size manual
-tmux resize-window -t SESSION_NAME -x 120 -y 36
+tmux -L cc-use set-option -t '=SESSION_NAME' window-size manual
+tmux -L cc-use resize-window -t '=SESSION_NAME' -x 120 -y 36
 ```
 
 录制结束后恢复：
 
 ```bash
-tmux set-option -t SESSION_NAME window-size latest
+tmux -L cc-use set-option -t '=SESSION_NAME' window-size latest
 ```
 
 不要使用全局 `-g` 修改所有 tmux session。
