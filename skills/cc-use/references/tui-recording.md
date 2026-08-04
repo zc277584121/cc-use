@@ -1,379 +1,244 @@
-# TUI / tmux session recording
+# TUI / tmux 录制为 GIF
 
-A workflow for turning a live TUI session (Claude Code, Codex CLI, or any
-ratatui-like full-screen app running in tmux) into a small, clean animated GIF
-suitable for a README header, blog post, or docs page.
+只有用户明确要求录制终端演示、制作 README 动图或输出 TUI GIF 时，才使用本工作流。
 
-The point of this reference is not to lock in one canonical GIF spec. It is to
-describe the pipeline, the principles behind each step, and the judgment calls
-the outer agent should make in each session.
+它适用于运行在 tmux 中的 Codex CLI、Claude Code、vim、htop、k9s、lazygit 等终端界面。它记录的是终端状态和时间轴，不包含操作系统桌面、真实鼠标或窗口像素；需要完整桌面视频时应使用屏幕录制工具。
 
-## When to use
+## 工具链
 
-Use this workflow when the user asks to:
+| 工具 | 用途 |
+|---|---|
+| `asciinema` | 把终端输出记录为带时间戳的 `.cast` |
+| `agg` | 把 cast 渲染为 GIF |
+| `gifsicle` | 优化和压缩 GIF |
+| Pillow（可选） | 裁剪状态栏、添加窗口外框 |
 
-- Record an inner cc-use'd CC TUI doing a demo.
-- Capture a tmux pane running a TUI tool (vim, htop, k9s, lazygit, mfs, etc.)
-  for documentation.
-- Produce a GIF for a GitHub README, blog post, or release announcement.
-
-If the goal is real-time screen video (with cursor, window chrome, OS desktop),
-use a screen recorder instead — this pipeline records terminal state only, not
-pixels.
-
-## Toolchain
-
-| Tool | Role | Where it comes from |
-|---|---|---|
-| `asciinema` | Record terminal as a timestamped JSON cast | apt / brew / pip |
-| `agg` | Render cast to animated GIF | `cargo install --locked --git https://github.com/asciinema/agg` or brew |
-| `gifsicle` | Optimize / quantize GIF | apt / brew |
-| `Pillow` (optional) | Crop cruft, add window chrome | `uv add pillow` in throwaway project |
-| `fonts-noto-color-emoji` (optional) | Render emojis in agg output | apt / brew |
-
-## Dependency check
-
-Before doing any work, probe the host:
+开始前检查依赖：
 
 ```bash
-which asciinema agg gifsicle
-fc-list | grep -i emoji
+command -v asciinema
+command -v agg
+command -v gifsicle
 python3 -c "from PIL import Image" 2>&1
 ```
 
-Report what is missing. **Ask the user before installing anything**, listing
-the install commands and what each tool is for. Do not install silently.
+缺少依赖时，列出缺失项和建议安装命令，获得用户同意后再安装。不要静默安装。
 
-Reasonable installers:
-
-- Linux (apt): `sudo apt-get install -y asciinema gifsicle fonts-noto-color-emoji`
-- macOS: `brew install asciinema agg gifsicle`
-- Linux `agg`: `cargo install --locked --git https://github.com/asciinema/agg`
-  (Rust toolchain required; takes a couple of minutes the first time.)
-- Pillow: do this inside a scratch `uv init --bare` project rather than polluting
-  the system Python.
-
-## Recording method
-
-The recording target is a tmux session — either one already started by cc-use
-(`ccu-<project>`) or a fresh tmux session created for the demo. The general
-pattern is:
-
-1. Ensure the inner tmux session exists and is at a stable starting state.
-2. Background-start `asciinema rec` wrapped around `tmux attach -r -t <session>`
-   with a hard `timeout` cap. Read-only attach prevents asciinema from
-   accidentally delivering keystrokes into the inner session.
-3. In the foreground, drive the demo via `cc-use delegate ...` or `tmux
-   send-keys`. The inner session renders output; asciinema captures it.
-4. Wait for the asciinema timeout to detach and finalize the cast.
-
-A worked example (writing to a project-local scratch dir):
+常见安装方式：
 
 ```bash
-OUT=/path/to/project/tmp/recording-$(date +%s)
+brew install asciinema agg gifsicle
+```
+
+Linux 可以使用系统包管理器；如果需要单独安装 `agg`，可以使用 Rust 工具链。Pillow 应优先放入临时 uv 项目，不要污染系统 Python。
+
+## 准备 cc-use session
+
+如果录制的是新的内层 Agent，先正常启动并完成 readiness 检查：
+
+```bash
+<skill_dir>/scripts/cc-use start \
+  --project "$PWD" \
+  --agent codex
+```
+
+保存返回的 session 名称。录制结束前不要执行 `finish`。
+
+如果启动画面显示登录、更新、权限或其他阻塞，停止录制准备并按主 Skill 的规则处理，不要为了录制而自动选择。
+
+## 录制方法
+
+推荐用 `asciinema` 以只读方式 attach 到目标 tmux session：
+
+```bash
+OUT="$PWD/tmp/recording-$(date +%s)"
 mkdir -p "$OUT"
 
 ( asciinema rec -y --overwrite \
-    -c "timeout 50 tmux attach -r -t ccu-<project>" \
+    -c "timeout 50 tmux attach -r -t SESSION_NAME" \
     --idle-time-limit 2 \
     "$OUT/demo.cast" > "$OUT/asciinema.log" 2>&1 ) &
 ASCII_PID=$!
 
-sleep 3   # let asciinema attach so initial state is captured
+sleep 3
 
-# Drive the demo (blocks until inner agent goes quiet)
-<skill_dir>/scripts/cc-use delegate "<demo prompt>" \
-    --project "$HOME/project" --agent claude \
-    --initial-quiet-seconds 12
+<skill_dir>/scripts/cc-use send "DEMO_TASK" \
+  --project "$PWD" \
+  --session SESSION_NAME \
+  --initial-quiet-seconds 12
 
-wait $ASCII_PID 2>/dev/null
+wait "$ASCII_PID" 2>/dev/null
 ```
 
-Important details:
+关键约束：
 
-- `-r` (read-only attach) is critical. Without it, any stray input typed in the
-  outer shell can interfere with the inner agent.
-- `timeout 50` is the maximum recording window. Pick it to comfortably cover
-  the demo duration + LLM latency budget + a small margin.
-- `--idle-time-limit 2` lets the cast preserve long pauses as 2-second pauses,
-  which keeps the cast file small.
-- When asciinema is run from the outer agent's `Bash` tool (no real TTY), the
-  PTY defaults to 80×24. To record at a specific size, ask the user to run the
-  pipeline from their interactive terminal at the desired window size, or use
-  `tmux set-option -t <session> window-size manual; tmux resize-window
-  -t <session> -x W -y H` before starting the recording. Always scope
-  `-t <session>` to the recording session — never drop it or pass `-g`, or
-  every session on the server gets locked to a fixed size. Once the recording
-  finishes, restore auto-resize on that session with `tmux set-option
-  -t <session> window-size latest`, otherwise the session stays pinned to the
-  recording dimensions even after the client detaches.
+- 必须使用 `tmux attach -r`，避免录制端意外向内层 TUI 输入内容。
+- 为录制设置明确的最长时长，给 Agent 延迟和任务执行留出余量。
+- `--idle-time-limit` 用于压缩长时间静默，不会删除真实事件。
+- 驱动演示仍使用 cc-use 的 `send`，不要绕过启动检查。
 
-## Always keep the .cast file
+如果录制需要固定窗口大小，只调整目标 session：
 
-A `.cast` is small (kilobytes), is the canonical intermediate, and contains
-every keystroke and ANSI sequence with timestamps. Keep it indefinitely.
+```bash
+tmux set-option -t SESSION_NAME window-size manual
+tmux resize-window -t SESSION_NAME -x 120 -y 36
+```
 
-The agent (now or in a later session) can re-derive any GIF from the cast:
+录制结束后恢复：
 
-- Re-render with a different theme, font, or speed without re-recording.
-- Edit cast events directly (cut idle segments, speed up a region, insert a
-  pause) — it is plain JSON-lines.
-- Re-quantize idle compression at render time without touching the source.
+```bash
+tmux set-option -t SESSION_NAME window-size latest
+```
 
-Never auto-delete cast files as part of cleanup. Treat them the way you treat
-source code, not the way you treat build artifacts.
+不要使用全局 `-g` 修改所有 tmux session。
 
-## Rendering principles (agg)
+## 始终保留 cast
 
-For README-grade GIFs, aim for the **pixel-perfect** look rather than the
-**smooth/realistic** look. The reason is GIF's palette limit: anti-aliased text
-introduces dozens of subtle edge colors that GIF quantization mangles into
-visible "fuzz". Pure-color rendering avoids the problem entirely.
+`.cast` 是体积很小的原始时间轴，应当作为源文件保留。以后可以从同一 cast：
 
-Principles:
+- 更换主题、字号和速度；
+- 重新压缩静默时长；
+- 调整剪辑区间；
+- 重新生成不同尺寸的 GIF。
 
-1. **Disable font anti-aliasing**: `--font-antialiasing off`
-   - Each glyph collapses to a binary foreground / background mask.
-   - Palette shrinks dramatically — often to fewer than 32 distinct colors.
-   - GIF quantization becomes effectively lossless.
-2. **Increase font size**: `--font-size 22` (or 28 for high-density / slide use)
-   - Larger glyphs make the aliased stair-steps disappear visually.
-   - Larger glyphs also help readability when the GIF is embedded at thumbnail
-     scale in a README.
-3. **Pick a small-palette theme**: `monokai`, `dracula`, `solarized-dark`,
-   `nord`. Avoid themes with subtle gradients.
-4. **Speed up + clamp idle**: `--speed 1.5 --idle-time-limit 1.5 --fps-cap 30`.
+不要在清理中自动删除 cast。
 
-A baseline command:
+## 使用 agg 渲染
+
+终端 GIF 优先追求清晰的纯色文字。关闭字体抗锯齿通常可以显著减少调色板颜色，避免 GIF 量化后出现模糊边缘。
+
+推荐基线：
 
 ```bash
 agg --theme monokai \
-    --font-size 22 \
-    --font-antialiasing off \
-    --speed 1.5 \
-    --idle-time-limit 1.5 \
-    --fps-cap 30 \
-    "$OUT/demo.cast" "$OUT/demo.raw.gif"
+  --font-size 22 \
+  --font-antialiasing off \
+  --speed 1.5 \
+  --idle-time-limit 1.5 \
+  --fps-cap 30 \
+  "$OUT/demo.cast" \
+  "$OUT/demo.raw.gif"
 ```
 
-## Optimization (gifsicle)
+原则：
 
-With anti-aliasing off, `gifsicle` is usually **lossless and still effective**
-because the source palette is already tiny:
+- 默认关闭抗锯齿；
+- README 常用字号可以从 22 开始；
+- 使用颜色数量较少的深色主题；
+- 适当加速并限制最长静默；
+- 不要直接把某一组参数写死成唯一标准。
+
+## 使用 gifsicle 优化
+
+先进行无损优化：
 
 ```bash
-gifsicle -O3 --colors 32 "$OUT/demo.raw.gif" -o "$OUT/demo.opt.gif"
+gifsicle -O3 --colors 32 \
+  "$OUT/demo.raw.gif" \
+  -o "$OUT/demo.opt.gif"
 ```
 
-Do NOT reach for `--lossy=N` by default. Lossy quantization is designed to
-smooth over photographic gradients; on pure-color terminal output it tends to
-introduce noise rather than reduce size. Try lossy only if the file is too
-large for the target platform after lossless `-O3 --colors`.
+终端内容通常是小调色板纯色图形。默认不要使用 `--lossy`；有损量化容易给文字边缘引入噪点。只有无损结果仍明显过大时，才尝试有损参数并进行视觉检查。
 
-## Produce a slate of options, not one canonical GIF
+## 输出三个候选版本
 
-Do not lock the user into one resolution / quality combination. Render a small
-panel of variants and let them pick:
+默认生成少量可比较的版本：
 
-| Variant | Font | Typical use | Typical size for 30s |
-|---|---|---|---|
-| compact | 16 | inline screenshot in dense docs | 70–90 KB |
-| standard | 22 | README header on a small project | 90–120 KB |
-| hi-dpi | 28 | screencast for slides or blog | 130–180 KB |
+| 版本 | 字号 | 适用场景 |
+|---|---:|---|
+| compact | 16 | 密集文档中的内嵌动图 |
+| standard | 22 | README 或普通博客 |
+| hi-dpi | 28 | 演示文稿或高分辨率页面 |
 
-Produce all three, report the file paths and sizes, and let the user pick. If
-the user has stated a target (e.g., "this is for a README header"), bias the
-recommendation but still render the other variants so they can compare.
+最多生成三个版本，报告每个文件的路径、尺寸和大小，并根据用户目标推荐一个。
 
-Do not render more than 3 variants by default. The user only ever picks one.
+## 裁剪底部内容
 
-## Cropping bottom cruft
+tmux 录制常包含：
 
-When recording a TUI in tmux, the bottom of every frame typically contains
-content the user does NOT want in the final GIF:
+- tmux 状态栏；
+- shell 提示符残留；
+- Agent TUI 底部帮助文字；
+- detach 后产生的空白或清屏帧。
 
-- Tmux status bar (full-width row with session name, time).
-- Shell prompt info that leaked through (e.g., `user@host:`).
-- TUI footer hints ("bypass permissions on (shift+tab to cycle)" etc.).
+不要写死固定裁剪比例。选择录制中段、内容较丰富的一帧进行判断，不要只看最后一帧。
 
-Do not hard-code a fixed crop ratio or a brittle pixel-pattern detector. The
-right cut depends on the TUI and the theme. Apply the principles below; the
-outer agent has eyes — use them.
-
-### What to look at
-
-Pick a **busy mid-recording frame**, not the very last frame. The very last
-frame of a `tmux attach` recording is often a cleared screen because the
-alternate screen buffer was restored when tmux client detached. Look at a frame
-about 50%–80% through the recording, where the TUI is still rendered.
-
-Convenient way to grab one for inspection:
+提取参考帧：
 
 ```bash
-# Extract frame 20 of the GIF as PNG
-python3 -c "from PIL import Image; \
-  img = Image.open('demo.raw.gif'); img.seek(20); \
-  img.convert('RGB').save('frame.png')"
+python3 -c "from PIL import Image; img = Image.open('demo.raw.gif'); img.seek(20); img.convert('RGB').save('frame.png')"
 ```
 
-Then read it.
+判断顺序：
 
-### Decision principles
+1. 从底部识别颜色高度一致的 tmux 状态栏。
+2. 检查状态栏上方是否还有不需要的 shell 或提示文字。
+3. 找到用户有意义的最后一行。
+4. 保留少量底部 padding。
+5. 裁剪后重新查看中段帧，确认没有切掉实际内容。
 
-For each candidate cut, look at the frame and decide based on these rules:
+常见界面：
 
-1. **Tmux status bar** (if present): scan rows from the bottom. A row where
-   almost every pixel is the same saturated color is the status bar.
-   Everything from that row down is recording artifact and must go.
+- Codex CLI、Claude Code：输入框底边通常是自然裁剪边界。
+- 普通 REPL：保留提示符所在行。
+- vim、htop、k9s 等全屏 TUI：通常只删除 tmux 状态栏。
+- 无法判断时宁可多保留，不要裁掉真实内容。
 
-2. **Shell / agent footer** (just above the status bar): inspect a few rows up
-   from the status bar. If they show shell prompt info or hint text the user
-   did not ask to display, cut them too.
+完全无法人工判断时，最保守的回退策略是只删除一行终端文字高度。
 
-3. **User-meaningful bottom edge**: this is the row to keep as the last visible
-   row in the output. Identify by what the TUI looks like:
+## 添加窗口外框
 
-   - Claude Code / Codex CLI: there is a visible input box with a top and
-     bottom border (a long horizontal rule of `─` or `═`). The bottom border
-     is the natural last row. Keep through it (+ a few pixels of padding).
-   - Plain REPL prompts (`>`, `❯`, `$`): there is no border. The prompt row
-     itself is the last row. Keep through it.
-   - Full-screen TUIs without a distinct input area (vim, top, htop, k9s):
-     there is no footer line to cut. The status bar is the only thing to
-     remove.
-   - Custom TUIs without recognizable structure: pick a row by content. If
-     unsure, err on the side of keeping too much rather than cutting into
-     real content.
+窗口外框属于可选装饰。默认可以添加一个简单的 macOS 风格标题栏：
 
-4. **Sanity check after cropping**: render the cropped result, look at a
-   busy frame, confirm that real content is intact. If the cut went into
-   meaningful pixels, raise the crop boundary by one row-height and retry.
+- 固定高度的标题区域；
+- 红、黄、绿三个圆点；
+- 标题栏与终端内容之间一条分隔线；
+- 不默认添加圆角，避免 GIF 二值透明造成锯齿。
 
-### Pseudocode
+用户要求 Windows、Linux 风格或不需要外框时，按用户选择处理。
+
+## 输出位置
+
+把本次录制的所有文件放在同一目录，例如：
 
 ```text
-frame = pick_busy_frame(gif)   # not the last frame
-
-status_top = scan_from_bottom(frame, predicate = uniform_saturated_row)
-if status_top is None:
-    # no tmux status bar; the TUI fills to the screen edge
-    cut_y = frame.height
-else:
-    # there is a status bar; check the rows above it for cruft
-    cruft_top = status_top
-    for row in rows_above(status_top, up_to = 5):
-        if looks_like_shell_or_hint_text(row):
-            cruft_top = row.y
-
-    # now find the meaningful bottom edge above cruft_top
-    if tui_has_visible_border():
-        cut_y = bottom_border_row + few_pixels_padding
-    elif tui_has_prompt_only():
-        cut_y = prompt_row + few_pixels_padding
-    else:
-        cut_y = cruft_top  # safe default
-
-return cut_y
+<project>/tmp/recording-<timestamp>/
 ```
 
-This is pseudocode on purpose. Implement it as small judgment calls each time
-the agent processes a recording, not as a frozen script. Themes change, TUIs
-change, font sizes change — a frozen script ages badly.
+至少保留：
 
-### Hard fallback
-
-If the agent really cannot decide (e.g., batch processing with no chance to
-inspect), the safest no-knowledge cut is:
-
-- Remove only the bottom `gif_height / cast_rows` pixels — exactly one
-  cast-text-row. This kills the tmux status bar (if any) and nothing else.
-
-This preserves more than wanted but never destroys real content.
-
-## Adding window chrome
-
-A fake macOS-style window frame is purely cosmetic and can be a fixed script —
-there is no judgment call here.
-
-Composite onto each cropped frame:
-
-- A solid horizontal title bar at the top (~36 px tall, dark gray for a dark
-  theme; light gray for a light theme).
-- Three traffic-light circles on the left of the title bar (red, yellow,
-  green).
-- A 1px separator line between title bar and content.
-
-Pillow snippet:
-
-```python
-TITLE_H = 36
-DOT_R = 7
-DOT_GAP = 10
-DOT_LEFT = 18
-TITLE_BG = (40, 40, 44)
-BORDER = (60, 60, 64)
-TRAFFIC = [(255, 95, 87), (254, 188, 46), (40, 200, 64)]
-
-canvas = Image.new("RGB", (w, h + TITLE_H), TITLE_BG)
-canvas.paste(frame, (0, TITLE_H))
-draw = ImageDraw.Draw(canvas)
-draw.line([(0, TITLE_H - 1), (w, TITLE_H - 1)], fill=BORDER)
-cx = DOT_LEFT
-for color in TRAFFIC:
-    draw.ellipse(
-        [(cx - DOT_R, TITLE_H // 2 - DOT_R),
-         (cx + DOT_R, TITLE_H // 2 + DOT_R)],
-        fill=color,
-    )
-    cx += DOT_R * 2 + DOT_GAP
+```text
+demo.cast
+demo.raw.gif
+demo.opt.gif
+asciinema.log
 ```
 
-Do not add rounded corners by default. GIF alpha is binary, so rounded corners
-look jagged. Keep the rectangle.
+向用户报告所有最终文件和 cast 的绝对路径。
 
-If the user has a strong preference (Linux GTK style, Windows style, no chrome
-at all), respect it — chrome is the easiest thing to change.
+## 清理 session
 
-## Output location
+完成录制、确认文件有效并且不再需要驱动内层 Agent 后，执行：
 
-Put intermediate and final files in one directory under the project, named
-unambiguously. Preferred order:
+```bash
+<skill_dir>/scripts/cc-use finish \
+  --project "$PWD" \
+  --session SESSION_NAME
+```
 
-- `<project>/tmp/recording-<timestamp>/`
-- `<project>/.tmp/recording-<timestamp>/`
-- `<project>/.cc-use/recordings/<timestamp>/` (only if no good project home)
+清理 cc-use session 不等于删除录制文件。cast 和用户选择保留的 GIF 应继续存在。
 
-Always report the exact paths of every artifact back to the user. The cast
-path matters because they may want to re-render later.
+## 验收清单
 
-## End-to-end checklist
-
-1. Probe dependencies; ask the user before installing anything.
-2. Confirm or create the inner tmux session.
-3. Decide an output directory under the project; create it.
-4. Start `asciinema rec` in background, wrapped around `tmux attach -r` with a
-   timeout.
-5. Drive the demo (cc-use `delegate` or direct `tmux send-keys`).
-6. Wait for the asciinema timeout; verify the cast file exists and is non-empty.
-7. Render 2–3 GIF variants with `agg --font-antialiasing off` at different
-   font sizes.
-8. Optimize each with `gifsicle -O3 --colors N` (lossless first; reach for
-   `--lossy` only if size requires it).
-9. Inspect a busy mid-recording frame; decide the crop policy from principles.
-   Crop all frames.
-10. Composite the macOS-style window chrome.
-11. Report every artifact path and file size to the user. Recommend one variant
-    based on their stated target (README header, slides, etc.).
-12. Keep the cast file. Do not auto-delete intermediates.
-
-## When to stop and ask the user
-
-- Dependencies missing → list and ask before installing.
-- Output target dimensions / theme / font unspecified → propose defaults but
-  let them override.
-- Recording longer than ~2 minutes → confirm intent (long cast files and
-  long renders cost minutes).
-- Cropping decision ambiguous (no visible border, theme out of distribution) →
-  show the frame and ask.
-- User uses a non-mac chrome style or wants no chrome at all → ask before
-  composing.
+1. 检查依赖，安装前获得用户同意。
+2. 启动并检查内层 TUI。
+3. 创建单独输出目录。
+4. 以只读方式 attach 并开始录制。
+5. 使用 `send` 驱动演示。
+6. 确认 cast 存在且非空。
+7. 生成不超过三个字号版本。
+8. 先做无损优化。
+9. 查看中段帧并决定裁剪。
+10. 按需添加窗口外框。
+11. 报告所有产物路径和大小。
+12. 保留 cast，最后清理 cc-use session。

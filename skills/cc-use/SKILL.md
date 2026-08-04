@@ -1,413 +1,229 @@
 ---
 name: cc-use
 description: >
-  Delegate long-running coding work to an inner CC session running in tmux,
-  while the outer agent stays focused on supervision, monitoring, and end-to-end
-  verification. Use when the user asks to run a long task, offload implementation,
-  keep working while an inner coding agent executes, or use cc-use.
-allowed-tools:
-  - Bash
-  - Read
-  - Glob
-  - Grep
+  把较长的编码、排查、测试或交互式 CLI 工作交给 tmux 中的内层命令行编码 Agent，
+  由当前外层 Agent 负责拆解任务、读取稳定屏幕快照、纠正方向、执行最终验收，并在本次
+  任务结束后销毁内层 session。适用于用户明确要求使用 cc-use、希望把长时间实现工作
+  交给内层 Agent，或需要在真实 Codex CLI 或 Claude Code TUI 中完成受监督工作。
 ---
 
 # cc-use
 
-You are the outer supervisor. Use this skill's `scripts/cc-use` helper as an
-implementation detail to start and supervise an inner CC session in tmux.
+把当前 Agent 作为外层监督者，把 tmux 中的 Codex CLI 或 Claude Code 作为内层执行者。
 
-Here, **CC** means a coding command-line agent. Depending on the host and local
-configuration, that can mean Claude Code, Codex CLI, or another compatible
-coding CLI.
+`scripts/cc-use` 只负责创建 session、发送输入、观察屏幕和清理资源。它不理解任务内容，也不判断屏幕表示完成、失败或阻塞。所有语义判断都由外层 Agent 完成。
 
-## When To Use This Skill
+## 核心分工
 
-Use cc-use for long-term tasks where the outer session should keep the global
-state clean and deliberate while an inner interactive session handles focused
-execution. The point is not just parallelism; it is supervision. The outer
-session keeps the plan, product intent, risks, compatibility concerns, and
-acceptance criteria in view while the inner session does bounded work.
+- 外层 Agent：保留用户目标、拆解任务、检查风险、阅读快照、纠正方向并完成最终验收。
+- 内层 Agent：调查问题、修改代码、运行命令和执行交互式工作。
+- cc-use helper：管理 tmux、可靠发送文本、在屏幕稳定时保存快照。
 
-This helps when a task is long enough that a single conversation may lose local
-details, pollute context with logs, or drift away from the top-level objective.
-The inner session can do implementation, command execution, exploration, and
-interactive TUI work, while the outer session preserves a compact supervisory
-context and performs final judgment.
+不要把整个长期任务一次性塞给内层 Agent。每次只发送一个边界清楚的调查、实现、测试或验证请求，然后根据真实结果决定下一步。
 
-Do not pass the whole long-term task to the inner session as one giant prompt.
-Break it into small, concrete requests, then inspect, steer, and refine like a
-human supervisor would:
+## 生命周期
 
-1. Ask for one focused investigation, implementation step, test case, or
-   verification action.
-2. Wait for an `inspect` observation.
-3. Read the snapshot semantically.
-4. Decide the next short request, wait, intervene, ask the user, or verify.
-5. Repeat until the outer session has enough evidence to accept or reject the
-   work.
+一次 cc-use 任务使用一个独立 session。session 可以连续运行很久，也可以跨越多次外层交互；不要因为运行时间长而主动关闭。只有本次任务已经成功、失败、取消或确认无法继续时，才执行 `finish`。
 
-Good scenarios:
+标准流程：
 
-- **End-to-end verification:** The outer session acts like a tester. It asks the
-  inner session to run realistic workflows, edge cases, and command sequences,
-  then evaluates the reported result and runs any final checks itself.
-- **Task decomposition and implementation:** For a large project with a plan or
-  design document, the outer session decomposes the plan into small
-  implementation requests and feeds them to the inner session one at a time.
-- **Adversarial testing:** The outer session designs high-level adversarial
-  cases based on project history, product positioning, architecture,
-  compatibility requirements, and likely regressions. The inner session executes
-  those cases and reports what happens.
-- **Interactive product testing:** For TUI products such as Claude Code, Codex
-  CLI, or plugin/skill/MCP workflows, normal one-shot command tests may be
-  insufficient. The inner session can install the in-development skill, MCP
-  server, or plugin inside an interactive terminal environment, then receive
-  follow-up input from the outer session to validate that the integration works
-  in the real TUI.
+1. 用 `start` 创建 session 并启动同一 Agent 家族的内层 TUI。
+2. 读取启动阶段返回的 `screen_path`，确认 TUI 已经可以正常接收任务。
+3. 用 `send` 发送一个短而具体的请求。
+4. 读取工作阶段快照，决定继续等待、发送修正请求、询问用户或开始验收。
+5. 从外层环境检查真实文件、测试结果和用户要求。
+6. 无论最终成功、失败、取消还是阻塞，都用 `finish` 销毁本次 session。
 
-## User Experience
+## 启动内层 Agent
 
-The expected user flow is natural language in the outer TUI:
-
-> Use cc-use to implement this long task: ...
-
-You should then:
-
-1. Start or reuse an inner CC session for the same agent family as the outer
-   session.
-2. When the inner session is newly created or replaced, treat startup readiness
-   as its own supervision step. Inspect the first stable screen semantically and
-   confirm the TUI is usable before sending follow-up work.
-3. Break the user's request into short, focused inner requests.
-4. Send each inner request exactly as written, without wrapper text.
-5. Monitor by screen stability, not by parsing agent-specific UI rules.
-6. When the screen stays quiet long enough, inspect the saved screen snapshot
-   semantically and decide whether to wait, steer, or verify.
-7. Run final acceptance checks yourself from the outer session.
-
-## Commands
-
-Run commands from the target project root unless you pass an explicit
-`--project DIR`. Use `--agent codex` from Codex and `--agent claude` from
-Claude Code. Do not cross-delegate between agent families.
-
-`--project` controls the tmux working directory, the derived session name, and
-the `.cc-use/state/` location. If omitted, it defaults to the current directory.
-Passing `--project "$PWD"` is recommended when the outer session may change
-directories.
-
-Session names use letters, numbers, underscores, and hyphens. They are exact
-identifiers: `work` is distinct from `work-review`, and every operation targets
-only the requested name. Operations that send input or update observation state
-are serialized per session; if another supervisor is already operating on that
-session, cc-use reports it as busy. Different named sessions can run in
-parallel.
-
-### `delegate`
-
-Start or reuse the inner session, send one short request exactly as provided,
-and wait until one observation is emitted:
+从目标项目根目录运行：
 
 ```bash
-<skill_dir>/scripts/cc-use delegate "TASK_TEXT" --project "$PWD" --agent codex
+<skill_dir>/scripts/cc-use start --project "$PWD" --agent codex
 ```
 
-Important options:
-
-- `--project DIR`: target project root. Also determines state location.
-- `--agent codex|claude`: inner agent family. Match the outer agent family.
-- `--session NAME`: override the derived tmux session name.
-- `--profile NAME`: Codex only; use only if the user explicitly requests an
-  inner Codex profile and only when creating the session.
-- `--initial-quiet-seconds N`: how long a stable screen must stay quiet before
-  an observation is emitted. Default is `30`.
-- `--poll-interval N`: seconds between screen captures while waiting. Default
-  is `2`.
-- `--replace`: kill and recreate an existing session. Use it for explicit
-  recovery of that named session.
-
-`TASK_TEXT` is passed through unchanged. Keep task decomposition in the outer
-session. Do not ask the helper to add role instructions, policy text, or task
-wrappers.
-
-For Codex, omit `--profile` by default. Existing tmux/TUI sessions are reused
-and do not need the profile on later requests.
-
-New-session readiness:
-
-- When a session is newly created, choose a deliberately small first request
-  when practical, then inspect the returned `screen_path` before sending more
-  work.
-- Treat tmux/session creation as proof that a pane exists, not proof that the
-  agent is ready. The first stable screen may still show a startup prompt,
-  update notice, auth/permission question, shell error, crashed process, or
-  another blocked state.
-- Do not accept or initiate agent, CLI, or skill updates from the inner TUI
-  unless the user explicitly requested that update. If an update prompt blocks
-  startup, dismiss or skip it only when that preserves the existing
-  environment, then inspect readiness again; otherwise report the blocker.
-- Judge readiness semantically from the screen. Do not turn this into
-  agent-specific keyword matching in the skill text or in normal supervision.
-- Treat a visibly truncated snapshot as incomplete evidence and inspect again
-  before concluding that the inner agent did not respond.
-- If readiness is unclear, wait and `monitor`, inspect `scrollback`, resolve the
-  prompt, restart the named session, or report the blocker. Do not keep sending
-  task text into an uncertain TUI state.
-
-### Agent startup
-
-cc-use launches the inner Codex with
-`--dangerously-bypass-approvals-and-sandbox` and launches the inner Claude Code
-with `--dangerously-skip-permissions`. Inner sessions are unattended and have
-the same broad access expectations for both agent families.
-
-When an unattended Codex TUI must use a specific cached authentication mode,
-set `CODEX_FORCED_LOGIN_METHOD=api` or `CODEX_FORCED_LOGIN_METHOD=chatgpt` in
-the caller's environment. cc-use then passes the corresponding
-`forced_login_method` CLI override to new interactive Codex sessions. Leave the
-variable unset for the normal interactive login selection behavior.
-
-The agent starts from the pane's interactive shell so local startup files can
-populate `PATH`, API keys, and other environment settings. cc-use prefixes the
-launch with the shell builtin `command`, making startup independent of aliases
-and shell functions while retaining the interactive shell environment.
-
-Keep two startup concerns separate:
-
-- Command resolution: the launch uses the shell's `PATH` without applying
-  aliases or functions.
-- Path and environment source: bypassing wrappers does not prove the executable
-  is available in every context. Cron jobs, scheduled runs, and nested tmux
-  sessions may have a thinner `PATH` than the outer interactive shell. Verify
-  command resolution in the same execution context or use an explicit, intended
-  environment override instead of adding host-specific fallback paths to the
-  generic skill.
-
-Expected behavior:
-
-- If the session does not exist, the helper creates a persistent tmux session
-  named like `ccu-<project-name>`.
-- If the session already exists, the helper reuses it.
-- The command normally returns one JSON event after the screen becomes stable.
-- If the screen keeps changing, the command may block until the screen becomes
-  quiet.
-
-### `monitor`
-
-Observe an existing derived session and wait for one observation:
+在 Claude Code 外层会话中使用：
 
 ```bash
-<skill_dir>/scripts/cc-use monitor --project "$PWD" --agent codex
+<skill_dir>/scripts/cc-use start --project "$PWD" --agent claude
 ```
 
-Use this after a previous observation suggests waiting, after you have waited
-based on your own semantic judgment, or after the user asks for status.
+始终让内外层使用同一 Agent 家族，不要从 Codex 外层启动 Claude Code，也不要从 Claude Code 外层启动 Codex。
 
-Important options:
+`start` 会生成唯一 session 名称。保存返回 JSON 中的 `session`，后续命令都显式传入它。
 
-- `--project DIR`, `--agent codex|claude`, `--session NAME`: identify the target
-  session.
-- `--initial-quiet-seconds N`, `--poll-interval N`: same meaning as `delegate`.
-
-Expected behavior:
-
-- If the screen changes, the helper resets the quiet timer and continues
-  waiting.
-- If the screen stays unchanged long enough, the helper saves a snapshot and
-  emits an `inspect` observation.
-- If the tmux session is gone, the helper emits `session_unavailable`.
-
-### `project-status`
-
-Check the derived project/session status without sending input:
+只有用户明确要求特定 Codex profile 时，才在启动阶段添加：
 
 ```bash
-<skill_dir>/scripts/cc-use project-status --project "$PWD" --agent codex
+<skill_dir>/scripts/cc-use start \
+  --project "$PWD" \
+  --agent codex \
+  --profile PROFILE_NAME
 ```
 
-Use `--json` when you need machine-readable output:
+### 启动检查
+
+`start` 只启动 TUI，不发送任务，也不会额外盲按 Enter。返回 `screen_stable` 后，必须读取 `screen_path` 并进行语义检查。
+
+如果画面显示以下情况，停止发送任务：
+
+- 登录、认证或账号选择；
+- Agent、CLI、Skill 或其他工具的更新提示；
+- 权限、信任或确认问题；
+- shell 错误、命令不存在或进程退出；
+- 无法确认 TUI 是否已经可用。
+
+遇到登录或更新问题时，不要替用户选择选项，不要自动升级。保存必要证据，执行 `finish`，然后报告阻塞。
+
+## 发送任务
+
+确认启动画面正常后发送一个请求：
 
 ```bash
-<skill_dir>/scripts/cc-use project-status --project "$PWD" --agent codex --json
+<skill_dir>/scripts/cc-use send "TASK_TEXT" \
+  --project "$PWD" \
+  --session SESSION_NAME
 ```
 
-Expected text output includes:
+把 `TASK_TEXT` 原样传给 helper。任务拆解在外层完成，不要让 helper 添加角色说明、策略文字或包装提示。
 
-- `project`: resolved project directory.
-- `session`: derived or explicit session name.
-- `agent`: selected agent family.
-- `session_available`: whether tmux currently has the session.
-- `observations`: number of saved observations for this session.
-- `silence_seconds`: seconds since the last detected screen change.
-- `seconds_until_next_check`: current watch schedule hint from state.
+`send` 会使用经过验证的 tmux buffer 和 Enter 提交流程发送文本，然后等待屏幕连续稳定一段时间并返回快照。
 
-### `scrollback`
+## 等待和观察
 
-If the saved screen snapshot does not include enough context, inspect recent
-tmux scrollback on demand. This is a temporary read to stdout, not a persistent
-transcript:
+如果快照显示测试、构建、下载、服务或其他命令可能仍在安静运行，由外层 Agent 根据语义决定等待多久。等待后调用：
 
 ```bash
-<skill_dir>/scripts/cc-use scrollback --project "$PWD" --agent codex --lines 2000
+<skill_dir>/scripts/cc-use monitor \
+  --project "$PWD" \
+  --session SESSION_NAME
 ```
 
-For paged inspection, use tmux line ranges. Negative numbers refer to scrollback
-history, `0` is the first visible line, and `-` means the end of the visible
-pane:
+helper 不提供语义上的“下次检查建议”。外层 Agent 自己选择等待时长。
+
+`status` 中的 `seconds_until_stable` 只是当前观察窗口距离“屏幕连续稳定”还差多少秒，不代表任务进度，也不代表建议多久后再次查看：
 
 ```bash
-<skill_dir>/scripts/cc-use scrollback --project "$PWD" --agent codex --start -4000 --end -2001
-<skill_dir>/scripts/cc-use scrollback --project "$PWD" --agent codex --start -2000 --end -
+<skill_dir>/scripts/cc-use status \
+  --project "$PWD" \
+  --session SESSION_NAME \
+  --json
 ```
 
-Options:
+## 补充屏幕上下文
 
-- `--lines N`: capture from `-N` through the end of the visible pane. Default is
-  `2000`.
-- `--start LINE`: explicit tmux capture start line.
-- `--end LINE`: explicit tmux capture end line. Default is `-`.
-
-Line semantics come from tmux:
-
-- Negative numbers are lines in scrollback history.
-- `0` is the first visible line.
-- `-` means the end of the visible pane.
-
-Use `scrollback` only after an `inspect` observation when the saved snapshot is
-too narrow. Do not use it as a continuous progress feed while the screen is
-actively changing.
-
-### Low-level commands
-
-These exist for diagnostics and recovery:
+稳定快照不够时，临时读取 tmux scrollback：
 
 ```bash
-<skill_dir>/scripts/cc-use list
-<skill_dir>/scripts/cc-use snapshot <session>
-<skill_dir>/scripts/cc-use kill <session>
+<skill_dir>/scripts/cc-use scrollback \
+  --session SESSION_NAME \
+  --lines 2000
 ```
 
-Use `kill` only when the user explicitly asks to close the inner session, or
-when the caller has finished with a deliberately short-lived named session.
+需要分段查看更早内容时：
 
-Keep the inner session running by default. A long-running project may span
-multiple outer conversations or calendar days, and the existing tmux/TUI session
-preserves useful continuity for later work.
+```bash
+<skill_dir>/scripts/cc-use scrollback \
+  --session SESSION_NAME \
+  --start -4000 \
+  --end -2001
+```
 
-Only stop the default project session when the user asks. A caller that creates
-its own named session may define a shorter lifecycle and close it after its work
-has been accepted or rejected.
+负数表示 tmux 历史行，`0` 表示当前可见区域第一行，`-` 表示当前 pane 末尾。
 
-### Scheduled tasks
+只在快照上下文不足时使用 scrollback。不要把它当作持续日志流，也不要在屏幕仍快速变化时反复读取。
 
-cc-use can also register host-local recurring tasks. Use this only when the user
-explicitly asks for a persistent local cron or heartbeat workflow.
+## 理解 observation
 
-- `heartbeat` periodically checks a persistent inner tmux session.
-- `cron` runs a scheduled prompt or executable script.
-- Schedules are agent-neutral; the default `--agent auto` follows the outer
-  session's agent family when the schedule is created.
-- Scheduled runs default to `danger-full-access` and `never` approval so local
-  recurring tasks do not stall on routine filesystem or network access.
-
-For the full workflow, command examples, migration notes, and troubleshooting,
-read `references/schedules.md`.
-
-### TUI / tmux recording to GIF
-
-cc-use can also help record an inner TUI session (Claude Code, Codex CLI, or
-any ratatui-like app running in tmux) to a small animated GIF — useful for
-README headers, blog posts, and docs.
-
-The recording pipeline is `asciinema` → `agg` → `gifsicle`, plus optional
-post-processing (cropping the tmux status bar and adding window chrome) with
-Pillow.
-
-Use this only when the user explicitly asks to record a TUI session or
-produce a GIF demo. Key constraints:
-
-- Probe dependencies and ask the user before installing anything.
-- Always keep the intermediate `.cast` file — it is the canonical source and
-  the user may want to re-render later.
-- Produce a small slate of GIF variants (different font sizes) rather than one
-  fixed spec; let the user choose.
-- Bottom-cropping the tmux status bar / shell footer is a per-recording
-  judgment call. Inspect a busy frame; do not freeze the heuristic into code.
-
-For the full pipeline, principles, and pseudocode for the cropping decision,
-read `references/tui-recording.md`.
-
-## Monitoring Model
-
-`delegate` and `monitor` use adaptive observation:
-
-- If the tmux screen changes, the outer agent does not read details and lets the
-  inner agent keep working.
-- If the screen stays unchanged past the current quiet threshold, cc-use captures
-  the screen once and emits a neutral `inspect` observation.
-- The helper does not classify stable screens as wait, intervene, or verify.
-  Always read `screen_path` and make the semantic decision in the outer session.
-- If the snapshot is too narrow, use `scrollback --lines N` or
-  `scrollback --start LINE --end LINE` for temporary context. Do not create
-  persistent transcript logs by default.
-
-Typical observation:
+典型事件：
 
 ```json
 {
-  "event": "observation",
-  "session": "ccu-my-project",
-  "observed_at": 1778223935,
-  "silence_seconds": 20,
+  "event": "screen_stable",
+  "phase": "work",
+  "session": "ccu-codex-project-20260804120000-12345",
+  "observed_at": 1785816000,
+  "silence_seconds": 30,
   "screen_digest": "sha256...",
-  "screen_path": "/path/to/project/.cc-use/state/ccu-my-project/screens/ccu-my-project-0001.txt",
-  "decision": {
-    "action": "inspect",
-    "next_check_after_seconds": 0,
-    "reason": "The screen is stable; inspect screen_path semantically before deciding whether to wait, steer, or verify.",
-    "confidence": 1.0
-  }
+  "screen_path": "/project/.cc-use/state/.../screens/...txt"
 }
 ```
 
-`inspect` means only that the screen is stable enough to review. It does not
-mean the task is complete, blocked, failed, or still running. The outer session
-must read `screen_path` and decide.
+`screen_stable` 只表示当前屏幕在静默窗口内没有变化，适合外层 Agent 阅读。它不表示：
 
-`session_unavailable` means tmux no longer has the expected session. Decide
-whether to restart, report failure, or ask the user.
+- 任务已经完成；
+- 任务已经失败；
+- Agent 正在等待；
+- 命令仍在运行；
+- 当前需要用户输入。
 
-## Outer Decision Rules
+外层 Agent 必须读取 `screen_path` 后自行判断。
 
-After an `inspect` observation:
+`session_unavailable` 表示 tmux 中已经没有目标 session。检查必要证据后，决定报告失败或重新开始本次任务。
 
-- If the snapshot shows final output or a prompt after a completed response, run
-  outer acceptance checks.
-- If it shows tests, builds, downloads, or server commands that may still be
-  running quietly, wait a reasonable interval and call `monitor` again.
-- If it shows a permission prompt, password prompt, yes/no question, or blocked
-  input, intervene or ask the user.
-- If it shows an error, send one short corrective request or report the blocker.
-- If it is too narrow to understand, monitor again and call `scrollback` once
-  with enough lines or an explicit range, then decide.
+## 外层决策
 
-If the screen is actively changing, `delegate` or `monitor` may not return for a
-while because the quiet timer keeps resetting. This is expected. The helper is
-designed to avoid consuming active output.
+读取快照后：
 
-Outer acceptance checks must be run outside the inner session. Check the actual
-files, run relevant tests or commands, inspect UI if applicable, and confirm the
-work matches the user's request.
+- 显示最终回答或已回到输入提示符：从外层运行验收检查。
+- 显示仍在运行的命令：等待合适时间，再调用 `monitor`。
+- 显示错误：发送一个短的修正请求，或报告阻塞。
+- 显示需要普通交互输入：只有在意图明确且授权充分时才发送响应。
+- 显示登录、认证或更新提示：停止，不选择选项，清理 session 并报告。
+- 内容被截断或不足以理解：使用一次 `scrollback` 获取足够上下文。
 
-## Discipline
+内层 Agent 的文字汇报不能作为成功证明。最终验收必须在外层执行，包括检查真实文件、运行相关测试、验证命令行为或检查 UI。
 
-- Do not expose tmux/session/state details unless the user asks.
-- Do not pass or synthesize environment variables for the inner session.
-- Keep the default project session available for future delegated work. Follow
-  the caller's lifecycle for explicitly named sessions.
-- Do not rely on the inner screen as proof of success; verify externally.
-- Do not use `scrollback` as a persistent transcript. It is a temporary tmux
-  history read.
-- Let the inner agent do implementation work.
-- The outer agent owns acceptance testing and final judgment.
+## 结束任务
+
+任务结束时执行：
+
+```bash
+<skill_dir>/scripts/cc-use finish \
+  --project "$PWD" \
+  --session SESSION_NAME
+```
+
+以下所有终止路径都必须调用 `finish`：
+
+- 实现和验收成功；
+- 验收失败；
+- 用户取消或更换任务；
+- 内层 Agent 无法继续；
+- 登录、更新或启动问题阻塞；
+- 外层决定放弃当前执行。
+
+不要设置基于运行时间的自动清理规则。一个合法任务可能持续数小时或跨天；只根据任务生命周期结束 session。
+
+## 环境与启动命令
+
+cc-use 先让 tmux 启动正常登录 shell，再通过 shell 输入：
+
+```text
+command codex ...
+command claude ...
+```
+
+登录 shell 按用户自己的正常规则加载 PATH、凭证和其他环境设置。cc-use 不扫描、不拼装、不注入环境变量，也不依次 source 各种 shell 配置文件。
+
+`command` 会绕过 shell alias 和 function，但仍然使用登录 shell 最终得到的 PATH。如果用户刚修改了正常 shell 启动文件，新建 session 会重新读取；已经运行的旧 session 不会自动刷新环境。
+
+## 诊断命令
+
+立即抓取当前 pane：
+
+```bash
+<skill_dir>/scripts/cc-use snapshot SESSION_NAME
+```
+
+列出 cc-use 命名的 session：
+
+```bash
+<skill_dir>/scripts/cc-use list
+```
+
+这些命令用于诊断。正常任务仍应通过 `start`、`send`、`monitor` 和 `finish` 管理。
+
+## TUI 录制
+
+只有用户明确要求录制终端演示或生成 GIF 时，才读取 `references/tui-recording.md`。

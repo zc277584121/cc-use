@@ -59,37 +59,39 @@ run_capture() {
 
 write_tmux_stub() {
   local stub_dir="$1"
-  local mode="$2"
   mkdir -p "$stub_dir"
-  cat > "$stub_dir/tmux" <<EOF
+  cat > "$stub_dir/tmux" <<'EOF'
 #!/usr/bin/env bash
-mode="$mode"
-case "\$mode:\$1" in
-  list:list-sessions)
-    printf 'alpha\nbeta\n'
+printf '%s\n' "$*" >> "$CC_USE_TMUX_LOG"
+case "$1" in
+  has-session)
+    [ -f "$CC_USE_TEST_SESSION_FILE" ]
     ;;
-  snapshot:capture-pane)
-    printf '\\033[31mred\\033[0m  \n'
+  new-session)
+    : > "$CC_USE_TEST_SESSION_FILE"
     ;;
-  scrollback:capture-pane)
-    if [ "\$6" = "-2000" ] && [ "\$8" = "-" ]; then
-      printf 'older line\ncurrent line  \n'
+  kill-session)
+    rm -f "$CC_USE_TEST_SESSION_FILE"
+    ;;
+  display-message)
+    printf '%s\n' "${CC_USE_TEST_GEOMETRY:-80 24 0}"
+    ;;
+  resize-window|set-option|send-keys|paste-buffer)
+    ;;
+  load-buffer)
+    last_arg="${!#}"
+    printf 'BUFFER:%s\n' "$(cat "$last_arg")" >> "$CC_USE_TMUX_LOG"
+    ;;
+  capture-pane)
+    [ -f "$CC_USE_TEST_SESSION_FILE" ] || exit 1
+    if printf '%s\n' "$*" | grep -q -- '-S'; then
+      printf '%s\n' "${CC_USE_TEST_SCROLLBACK:-older line}"
     else
-      exit 2
+      printf '%b\n' "${CC_USE_TEST_SCREEN:-ready}"
     fi
     ;;
-  scrollback-range:capture-pane)
-    if [ "\$6" = "-4000" ] && [ "\$8" = "-2001" ]; then
-      printf 'range line\n'
-    else
-      exit 2
-    fi
-    ;;
-  unavailable:capture-pane)
-    exit 1
-    ;;
-  *)
-    exit 0
+  list-sessions)
+    printf 'user-session\nccu-codex-project-1\n'
     ;;
 esac
 EOF
@@ -101,222 +103,146 @@ EOF
 source "$SCRIPT"
 
 assert_eq "abc-DEF-ghi" "$(safe_name "abc DEF/ghi")" "safe_name normalizes unsafe characters"
-assert_eq "ccu-example-project" "$(session_name_for_project "/tmp/example project")" "session_name_for_project uses compact safe basename"
+assert_contains "$(new_session_name "/tmp/example project" codex)" "ccu-codex-example-project-" "new_session_name includes the agent and project"
 assert_eq "=example" "$(tmux_session_target "example")" "tmux_session_target forces exact session matching"
 assert_eq "=example:" "$(tmux_pane_target "example")" "tmux_pane_target forces exact pane matching"
 
-prompt="$(build_inner_task_prompt $'first line\nsecond line')"
-assert_eq $'first line\nsecond line' "$prompt" "build_inner_task_prompt passes text through unchanged"
-
-codex_command="$(build_codex_command "" "workspace-write" "never")"
+codex_command="$(build_codex_command "")"
 assert_eq "command codex --no-alt-screen --dangerously-bypass-approvals-and-sandbox" "$codex_command" "build_codex_command uses the interactive Codex command"
 
 CODEX_FORCED_LOGIN_METHOD=api
-codex_command="$(build_codex_command "" "workspace-write" "never")"
-assert_eq 'command codex --no-alt-screen --dangerously-bypass-approvals-and-sandbox -c forced_login_method=\"api\"' "$codex_command" "build_codex_command can force API-key login for unattended TUI startup"
+codex_command="$(build_codex_command "")"
+assert_not_contains "$codex_command" "forced_login_method" "build_codex_command never selects a login method"
 unset CODEX_FORCED_LOGIN_METHOD
 
-codex_command="$(build_codex_command "zilliz" "workspace-write" "never")"
+codex_command="$(build_codex_command "zilliz")"
 assert_eq "command codex --no-alt-screen --dangerously-bypass-approvals-and-sandbox --profile zilliz" "$codex_command" "build_codex_command appends an explicit profile"
 
-claude_command="$(build_agent_command claude "" workspace-write never)"
+claude_command="$(build_agent_command claude "")"
 assert_contains "$claude_command" "command claude" "build_agent_command bypasses shell aliases and functions for Claude"
 assert_contains "$claude_command" "--dangerously-skip-permissions" "build_agent_command keeps Claude permissions bypass"
-
-screen_file="$tmp_root/screen.txt"
-printf 'Allow this command?\n' > "$screen_file"
-decision_for_stable_screen
-assert_eq "inspect" "$decision_action" "stable screen observations require semantic inspection"
-assert_eq "0" "$decision_next" "stable screen observations do not schedule heuristic waiting"
 
 run_capture output status "$SCRIPT"
 [ "$status" -eq 1 ] || fail "missing command should exit 1"
 assert_contains "$output" "Usage:" "missing command prints usage"
 
-run_capture output status "$SCRIPT" delegate
-[ "$status" -eq 1 ] || fail "delegate without task should exit 1"
-assert_contains "$output" "delegate requires TASK" "delegate without task reports a clear error"
+run_capture output status "$SCRIPT" send
+[ "$status" -eq 1 ] || fail "send without task should exit 1"
+assert_contains "$output" "send requires TASK" "send without task reports a clear error"
+
+run_capture output status "$SCRIPT" monitor
+[ "$status" -eq 1 ] || fail "monitor without a session should exit 1"
+assert_contains "$output" "--session is required" "monitor requires an explicit task session"
 
 run_capture output status "$SCRIPT" snapshot 'invalid:name'
 [ "$status" -eq 1 ] || fail "invalid session name should exit 1"
 assert_contains "$output" "session name may contain only" "invalid session name reports the allowed character set"
 
-stub_dir="$tmp_root/stub-list"
-write_tmux_stub "$stub_dir" list
-run_capture output status env PATH="$stub_dir:$PATH" "$SCRIPT" list
-[ "$status" -eq 0 ] || fail "list with tmux stub should exit 0"
-assert_eq $'alpha\nbeta' "$output" "list prints tmux session names"
-
-stub_dir="$tmp_root/stub-snapshot"
-write_tmux_stub "$stub_dir" snapshot
-run_capture output status env PATH="$stub_dir:$PATH" "$SCRIPT" snapshot fake-session
-[ "$status" -eq 0 ] || fail "snapshot with tmux stub should exit 0"
-assert_eq "red" "$output" "snapshot strips ANSI escapes and trailing spaces"
-
-stub_dir="$tmp_root/stub-geometry"
-mkdir -p "$stub_dir"
-cat > "$stub_dir/tmux" <<'EOF'
-#!/usr/bin/env bash
-case "$1" in
-  display-message)
-    printf '%s\n' "$CC_USE_TEST_GEOMETRY"
-    ;;
-  resize-window)
-    printf '%s\n' "$*" >> "$CC_USE_TMUX_LOG"
-    ;;
-  capture-pane)
-    printf 'screen\n'
-    ;;
-esac
-EOF
-chmod +x "$stub_dir/tmux"
-geometry_log="$tmp_root/geometry.log"
-: > "$geometry_log"
-run_capture output status env PATH="$stub_dir:$PATH" CC_USE_TEST_GEOMETRY="10 4 0" CC_USE_TMUX_LOG="$geometry_log" "$SCRIPT" snapshot tiny-session
-[ "$status" -eq 0 ] || fail "snapshot with a tiny detached pane should exit 0"
-assert_contains "$(cat "$geometry_log")" "resize-window -t =tiny-session -x 160 -y 50" "snapshot enlarges a tiny detached pane before capture"
-
-: > "$geometry_log"
-run_capture output status env PATH="$stub_dir:$PATH" CC_USE_TEST_GEOMETRY="10 4 1" CC_USE_TMUX_LOG="$geometry_log" "$SCRIPT" snapshot attached-session
-[ "$status" -eq 0 ] || fail "snapshot with a tiny attached pane should exit 0"
-assert_eq "" "$(cat "$geometry_log")" "snapshot does not resize an attached pane"
-
-: > "$geometry_log"
-run_capture output status env PATH="$stub_dir:$PATH" CC_USE_TEST_GEOMETRY="80 24 0" CC_USE_TMUX_LOG="$geometry_log" "$SCRIPT" snapshot normal-session
-[ "$status" -eq 0 ] || fail "snapshot with a normal detached pane should exit 0"
-assert_eq "" "$(cat "$geometry_log")" "snapshot keeps a usable detached pane unchanged"
-
-stub_dir="$tmp_root/stub-launch"
-mkdir -p "$stub_dir"
-cat > "$stub_dir/tmux" <<'EOF'
-#!/usr/bin/env bash
-printf '%s\n' "$*" >> "$CC_USE_TMUX_LOG"
-exit 0
-EOF
-chmod +x "$stub_dir/tmux"
-launch_log="$tmp_root/launch.log"
-run_capture output status env PATH="$stub_dir:$PATH" CC_USE_TMUX_LOG="$launch_log" bash -c '
-  source "$1"
-  launch_agent_session test-session /tmp/project "command codex --profile zilliz"
-' _ "$SCRIPT"
-[ "$status" -eq 0 ] || fail "launch_agent_session with tmux stub should exit 0"
-launch_output="$(cat "$launch_log")"
-assert_contains "$launch_output" "new-session -d -s test-session -c /tmp/project" "launch_agent_session starts an interactive shell in the project"
-assert_contains "$launch_output" "set-option -t =test-session history-limit 50000" "launch_agent_session configures the exact session"
-assert_contains "$launch_output" "send-keys -t =test-session: command codex --profile zilliz Enter" "launch_agent_session starts the agent via the exact pane"
-assert_not_contains "$launch_output" "bash -lc" "launch_agent_session does not bypass shell startup files"
-
-stub_dir="$tmp_root/stub-scrollback"
-write_tmux_stub "$stub_dir" scrollback
-run_capture output status env PATH="$stub_dir:$PATH" "$SCRIPT" scrollback --project "$tmp_root" --agent codex --lines 2000
-[ "$status" -eq 0 ] || fail "scrollback with tmux stub should exit 0"
-assert_eq $'older line\ncurrent line' "$output" "scrollback captures requested history and normalizes output"
-
-stub_dir="$tmp_root/stub-scrollback-range"
-write_tmux_stub "$stub_dir" scrollback-range
-run_capture output status env PATH="$stub_dir:$PATH" "$SCRIPT" scrollback --project "$tmp_root" --agent codex --start -4000 --end -2001
-[ "$status" -eq 0 ] || fail "scrollback range with tmux stub should exit 0"
-assert_eq "range line" "$output" "scrollback captures explicit start and end range"
-
-run_capture output status "$SCRIPT" scrollback --project "$tmp_root" --agent codex --start abc
-[ "$status" -eq 1 ] || fail "scrollback with invalid start should exit 1"
-assert_contains "$output" "--start must be '-' or an integer line number" "scrollback validates explicit start"
-
+stub_dir="$tmp_root/stub"
+write_tmux_stub "$stub_dir"
+tmux_log="$tmp_root/tmux.log"
+session_file="$tmp_root/session.exists"
 project="$tmp_root/project"
-mkdir -p "$project"
 lock_root="$tmp_root/locks"
-stub_dir="$tmp_root/stub-unavailable"
-write_tmux_stub "$stub_dir" unavailable
-run_capture output status env PATH="$stub_dir:$PATH" CC_USE_LOCK_ROOT="$lock_root" "$SCRIPT" monitor --project "$project" --agent claude --initial-quiet-seconds 0 --poll-interval 1
-[ "$status" -eq 0 ] || fail "monitor unavailable session should exit 0"
-assert_contains "$output" '"event":"session_unavailable"' "monitor reports unavailable session as JSON"
-assert_contains "$output" '"session":"ccu-project"' "monitor includes derived session name"
-[ -f "$project/.cc-use/state/ccu-project/watch.observations.jsonl" ] || fail "monitor writes session-scoped observation history"
-[ ! -e "$lock_root/ccu-project.lock" ] || fail "monitor releases the session operation lock"
+mkdir -p "$project"
+: > "$tmux_log"
 
-busy_project="$tmp_root/busy-project-a"
-other_project="$tmp_root/busy-project-b"
-mkdir -p "$busy_project" "$other_project"
-busy_session="busy-session"
-busy_lock="$lock_root/$busy_session.lock"
+common_env=(
+  env
+  PATH="$stub_dir:$PATH"
+  CC_USE_TMUX_LOG="$tmux_log"
+  CC_USE_TEST_SESSION_FILE="$session_file"
+  CC_USE_LOCK_ROOT="$lock_root"
+)
+
+run_capture output status "${common_env[@]}" CC_USE_TEST_SCREEN=$'\033[31mStartup ready\033[0m  ' \
+  "$SCRIPT" start --project "$project" --agent codex --session ccu-test --initial-quiet-seconds 0 --poll-interval 1
+[ "$status" -eq 0 ] || fail "start should exit 0"
+assert_contains "$output" '"event":"screen_stable"' "start emits a stable-screen observation"
+assert_contains "$output" '"phase":"startup"' "start marks the observation as startup"
+assert_contains "$output" '"session":"ccu-test"' "start returns the generated task session"
+assert_eq "Startup ready" "$(cat "$project/.cc-use/state/ccu-test/screens/ccu-test-0001.txt")" "start saves a normalized startup screen"
+[ -f "$session_file" ] || fail "start creates the tmux session"
+[ -f "$project/.cc-use/state/ccu-test/session.json" ] || fail "start writes task-scoped session metadata"
+assert_contains "$(cat "$tmux_log")" "new-session -d -s ccu-test -c $project" "start creates the session in the project"
+assert_contains "$(cat "$tmux_log")" "send-keys -t =ccu-test: command codex --no-alt-screen --dangerously-bypass-approvals-and-sandbox Enter" "start launches Codex through the login shell"
+assert_eq "1" "$(grep -c '^send-keys ' "$tmux_log")" "start sends only the launch command and no blind follow-up Enter"
+
+: > "$tmux_log"
+run_capture output status "${common_env[@]}" CC_USE_TEST_SCREEN="Task complete" \
+  "$SCRIPT" send "Implement the fix." --project "$project" --session ccu-test --initial-quiet-seconds 0 --poll-interval 1
+[ "$status" -eq 0 ] || fail "send should exit 0"
+assert_contains "$output" '"phase":"work"' "send marks the observation as work"
+assert_contains "$(cat "$tmux_log")" "BUFFER:Implement the fix." "send pastes the task unchanged"
+assert_contains "$(cat "$tmux_log")" "send-keys -t =ccu-test: C-u" "send clears pending input before pasting"
+assert_contains "$(cat "$tmux_log")" "send-keys -t =ccu-test: Enter" "send preserves the proven Enter submission sequence"
+assert_contains "$(cat "$tmux_log")" "send-keys -t =ccu-test: C-m" "send preserves the carriage-return fallback"
+
+run_capture output status "${common_env[@]}" "$SCRIPT" status --project "$project" --session ccu-test --json
+[ "$status" -eq 0 ] || fail "status should exit 0"
+assert_contains "$output" '"session_available":true' "status reports the active session"
+assert_contains "$output" '"seconds_until_stable":' "status exposes the mechanical quiet-window countdown"
+assert_not_contains "$output" "next_check" "status does not expose a semantic next-check suggestion"
+
+: > "$tmux_log"
+run_capture output status "${common_env[@]}" CC_USE_TEST_SCROLLBACK=$'older line\ncurrent line  ' \
+  "$SCRIPT" scrollback --session ccu-test --lines 2000
+[ "$status" -eq 0 ] || fail "scrollback should exit 0"
+assert_eq $'older line\ncurrent line' "$output" "scrollback captures and normalizes recent history"
+
+run_capture output status "$SCRIPT" scrollback --session ccu-test --start abc
+[ "$status" -eq 1 ] || fail "scrollback with invalid start should exit 1"
+assert_contains "$output" "--start must be '-' or an integer line number" "scrollback validates explicit ranges"
+
+busy_lock="$lock_root/ccu-test.lock"
 mkdir -p "$busy_lock"
 printf '%s\n' "$$" > "$busy_lock/pid"
-run_capture output status env PATH="$stub_dir:$PATH" CC_USE_LOCK_ROOT="$lock_root" "$SCRIPT" monitor --project "$other_project" --agent codex --session "$busy_session" --initial-quiet-seconds 0 --poll-interval 1
+run_capture output status "${common_env[@]}" "$SCRIPT" monitor --project "$project" --session ccu-test --initial-quiet-seconds 0 --poll-interval 1
 [ "$status" -eq 1 ] || fail "monitor on a busy session should exit 1"
-assert_contains "$output" "session is busy: $busy_session" "the session lock applies across project paths"
+assert_contains "$output" "session is busy: ccu-test" "the session lock prevents concurrent input and observation"
 rm -rf "$busy_lock"
 
-stale_session="stale-session"
+stale_session="ccu-stale"
 stale_lock="$lock_root/$stale_session.lock"
 mkdir -p "$stale_lock"
-stale_pid=99999999
-kill -0 "$stale_pid" 2>/dev/null && fail "stale lock test requires a non-running PID"
-printf '%s\n' "$stale_pid" > "$stale_lock/pid"
-run_capture output status env PATH="$stub_dir:$PATH" CC_USE_LOCK_ROOT="$lock_root" "$SCRIPT" monitor --project "$busy_project" --agent codex --session "$stale_session" --initial-quiet-seconds 0 --poll-interval 1
-[ "$status" -eq 0 ] || fail "monitor should recover a stale session lock"
-assert_contains "$output" '"event":"session_unavailable"' "monitor continues after recovering a stale lock"
-[ ! -e "$stale_lock" ] || fail "monitor removes the recovered session lock"
+printf '%s\n' "99999999" > "$stale_lock/pid"
+run_capture output status "${common_env[@]}" "$SCRIPT" monitor --project "$project" --session "$stale_session" --initial-quiet-seconds 0 --poll-interval 1
+[ "$status" -eq 0 ] || fail "monitor should recover a dead operation lock"
+assert_contains "$output" '"event":"screen_stable"' "monitor continues after recovering a dead operation lock"
+[ ! -e "$stale_lock" ] || fail "monitor releases the recovered operation lock"
 
-cat > "$project/.cc-use/state/ccu-project/watch.env" <<'EOF'
-last_digest=abc123
-silence_started_at=1
-next_check_at=1
-observation_count=2
-EOF
-run_capture output status env PATH="$stub_dir:$PATH" "$SCRIPT" project-status --project "$project" --agent claude --json
-[ "$status" -eq 0 ] || fail "project-status --json should exit 0"
-assert_contains "$output" '"session":"ccu-project"' "project-status JSON includes derived session"
-assert_contains "$output" '"agent":"claude"' "project-status JSON includes agent"
-assert_contains "$output" '"observation_count":2' "project-status JSON includes watch state"
+rm -f "$session_file"
+run_capture output status "${common_env[@]}" "$SCRIPT" monitor --project "$project" --session ccu-missing --initial-quiet-seconds 0 --poll-interval 1
+[ "$status" -eq 0 ] || fail "monitor should report a missing session"
+assert_contains "$output" '"event":"session_unavailable"' "monitor reports a missing session as an observation"
 
-schedule_home="$tmp_root/schedule-home"
-mkdir -p "$schedule_home"
-stub_dir="$tmp_root/stub-launchctl"
-mkdir -p "$stub_dir"
-cat > "$stub_dir/launchctl" <<'EOF'
-#!/usr/bin/env bash
-exit 0
-EOF
-chmod +x "$stub_dir/launchctl"
-cat > "$stub_dir/codex" <<'EOF'
-#!/usr/bin/env bash
-printf 'codex args:'
-printf ' <%s>' "$@"
-printf '\n'
-exit 0
-EOF
-chmod +x "$stub_dir/codex"
+: > "$session_file"
+mkdir -p "$project/.cc-use/state/ccu-test"
+run_capture output status "${common_env[@]}" "$SCRIPT" finish --project "$project" --session ccu-test
+[ "$status" -eq 0 ] || fail "finish should exit 0"
+assert_contains "$output" '"event":"session_finished"' "finish reports cleanup"
+[ ! -f "$session_file" ] || fail "finish kills the exact task session"
+[ ! -e "$project/.cc-use/state/ccu-test" ] || fail "finish removes the task observation state"
 
-run_capture output status env HOME="$schedule_home" PATH="$stub_dir:$PATH" "$SCRIPT" schedule-add cron daily --project "$project" --cron-expr "0 7 * * *" --prompt "check" --agent codex --profile zilliz --search
-[ "$status" -eq 0 ] || fail "schedule-add cron should exit 0"
-assert_contains "$output" "added cron schedule" "schedule-add cron reports success"
-cron_id="$(jq -r '.schedules[] | select(.type == "cron") | .id' "$schedule_home/.cc-use/schedules.json")"
-assert_contains "$(jq -c '.schedules[0]' "$schedule_home/.cc-use/schedules.json")" '"agent":"codex"' "cron schedule stores agent"
-assert_contains "$(jq -c '.schedules[0]' "$schedule_home/.cc-use/schedules.json")" '"profile":"zilliz"' "cron schedule stores profile"
-assert_contains "$(jq -c '.schedules[0]' "$schedule_home/.cc-use/schedules.json")" '"search":true' "cron schedule stores search flag"
-assert_contains "$(jq -c '.schedules[0]' "$schedule_home/.cc-use/schedules.json")" '"sandbox":"danger-full-access"' "cron schedule defaults to broad sandbox"
-if [ "$(uname -s)" = "Darwin" ]; then
-  [ -f "$schedule_home/Library/LaunchAgents/com.cc-use.${cron_id}.plist" ] || fail "schedule-add cron writes launchd plist"
-  assert_contains "$(plutil -p "$schedule_home/Library/LaunchAgents/com.cc-use.${cron_id}.plist")" "schedule-run" "cron plist calls unified runner"
-fi
+: > "$tmux_log"
+: > "$session_file"
+run_capture output status "${common_env[@]}" CC_USE_TEST_GEOMETRY="10 4 0" \
+  "$SCRIPT" snapshot ccu-tiny
+[ "$status" -eq 0 ] || fail "snapshot with a tiny detached pane should exit 0"
+assert_contains "$(cat "$tmux_log")" "resize-window -t =ccu-tiny -x 160 -y 50" "snapshot enlarges a tiny detached pane before capture"
 
-run_capture output status env HOME="$schedule_home" PATH="$stub_dir:$PATH" "$SCRIPT" schedule-add heartbeat news --project "$project" --interval-minutes 15 --agent codex --profile zilliz --session hb-news
-[ "$status" -eq 0 ] || fail "schedule-add heartbeat should exit 0"
-assert_contains "$output" "added heartbeat schedule" "schedule-add heartbeat reports success"
-assert_contains "$(jq -c '.schedules[] | select(.type == "heartbeat")' "$schedule_home/.cc-use/schedules.json")" '"session_name":"hb-news"' "heartbeat schedule stores explicit session"
-assert_contains "$(jq -c '.schedules[] | select(.type == "heartbeat")' "$schedule_home/.cc-use/schedules.json")" '"sandbox":"danger-full-access"' "heartbeat schedule defaults to broad sandbox"
+: > "$tmux_log"
+run_capture output status "${common_env[@]}" CC_USE_TEST_GEOMETRY="10 4 1" \
+  "$SCRIPT" snapshot ccu-attached
+[ "$status" -eq 0 ] || fail "snapshot with a tiny attached pane should exit 0"
+assert_not_contains "$(cat "$tmux_log")" "resize-window" "snapshot does not resize an attached pane"
 
-run_capture output status env HOME="$schedule_home" PATH="$stub_dir:$PATH" "$SCRIPT" schedule-list
-[ "$status" -eq 0 ] || fail "schedule-list should exit 0"
-assert_contains "$output" "zilliz" "schedule-list includes profile"
-
-run_capture output status env HOME="$schedule_home" PATH="$stub_dir:$PATH" "$SCRIPT" schedule-run "$cron_id"
-[ "$status" -eq 0 ] || fail "schedule-run cron should exit 0"
-assert_contains "$(cat "$schedule_home/.cc-use/logs/cron-${cron_id}.log")" "codex args: <--profile> <zilliz> <--dangerously-bypass-approvals-and-sandbox> <--search> <exec> <--skip-git-repo-check>" "schedule-run cron uses stored global options"
-assert_contains "$(cat "$schedule_home/.cc-use/logs/cron-${cron_id}.log")" "<--search>" "schedule-run cron uses the stored search flag"
+run_capture output status "${common_env[@]}" "$SCRIPT" list
+[ "$status" -eq 0 ] || fail "list should exit 0"
+assert_eq "ccu-codex-project-1" "$output" "list hides unrelated user sessions"
 
 if command -v tmux >/dev/null 2>&1; then
-  base="cc-use-target-check-$$"
+  base="ccu-target-check-$$"
   sibling="${base}-sibling"
   tiny="${base}-tiny"
   cleanup_tmux() {
@@ -331,13 +257,11 @@ if command -v tmux >/dev/null 2>&1; then
   if tmux_has_session "$base"; then
     fail "exact lookup matched a prefix sibling"
   fi
-  "$SCRIPT" kill "$base"
-  tmux has-session -t "=$sibling" 2>/dev/null || fail "killing an absent exact session removed its prefix sibling"
 
   tmux new-session -d -s "$base"
-  "$SCRIPT" kill "$base"
-  tmux has-session -t "=$base" 2>/dev/null && fail "kill left the exact target alive"
-  tmux has-session -t "=$sibling" 2>/dev/null || fail "kill removed a different named session"
+  tmux kill-session -t "=$base"
+  tmux has-session -t "=$base" 2>/dev/null && fail "exact cleanup left the target alive"
+  tmux has-session -t "=$sibling" 2>/dev/null || fail "exact cleanup removed a prefix sibling"
 
   tmux new-session -d -s "$tiny"
   tmux resize-window -t "=$tiny" -x 10 -y 4
